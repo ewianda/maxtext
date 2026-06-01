@@ -12,21 +12,28 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# OmicsLM built on top of Qwen3-4B.
+# OmicsLM built on top of Qwen3-8B.
 #
-# Architecture: Qwen3-4B backbone + a trainable omics projection layer that
+# This is the recommended backbone for OmicsLM production training.
+# The Qwen3-8B model was used in the Tunix pipeline and is larger than
+# the 4B variant, offering better language understanding for biological QA.
+#
+# Architecture: Qwen3-8B backbone + a trainable omics projection layer that
 # maps raw omics vectors (expression + FunOmics + Geneformer = 21287-dim) into
 # the LLM embedding space and injects them at <omics> placeholder positions.
 #
 # Gene panel: GENCODE v47 intersect Geneformer V2 = 20,006 genes
 #   omics_dim = 1 (scale) + 20006 (expression) + 512 (FunOmics) + 768 (Geneformer) = 21287
 #
+# Data: gs://omicslm-batch-data/arrayrecord/omicslm-*.array_record (16 shards, ~6M examples)
+# Norm stats: gs://omicslm-batch-data/omics_norm_stats.npz
+#
 # To fine-tune only the projection layer, set:
 #   trainable_parameters_mask: ['.*omics_projection.*']
 #
-# Backbone hyperparameters come from qwen3-4b.yml.
+# Backbone hyperparameters come from qwen3-8b.yml.
 
-include: "models/qwen3-4b.yml"
+include: "models/qwen3-8b.yml"
 
 # ── OmicsLM-specific settings ──────────────────────────────────────────────
 use_omics: true
@@ -43,6 +50,11 @@ omics_token_id: -1
 # Small gain keeps omics contributions near-zero at the start of training so
 # the backbone language model loss is not destabilised.
 omics_projection_gain: 0.01
+
+# ── Data pipeline settings ─────────────────────────────────────────────────
+grain_file_type: "arrayrecord"
+# GCS pattern for the 6M-example ArrayRecord shards:
+# grain_train_files: "gs://omicslm-batch-data/arrayrecord/omicslm-*.array_record"
 
 # ── Recommended fine-tuning settings ──────────────────────────────────────
 # Freeze the backbone; only train the omics projection initially:

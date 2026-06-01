@@ -255,6 +255,88 @@ def pretrain_preprocessing_pipeline(
   return dataset
 
 
+def omics_pretrain_preprocessing_pipeline(
+    dataset,
+    config,
+    data_columns,
+    tokenize,
+    grain_worker_count,
+    grain_per_worker_buffer_size,
+):
+  """Grain pipeline for OmicsLM pre-training data that emits ``omics_inputs``.
+
+  Behaves like ``pretrain_preprocessing_pipeline`` for the text columns, but
+  also parses the ``omics_inputs`` float field stored alongside each record and
+  ensures it survives all transforms without being padded or truncated.
+
+  Expected record schema (tf.train.Example / ArrayRecord):
+    - One text column (``data_columns[0]``): bytes (raw text) or int64 token IDs.
+    - ``omics_inputs``: FloatList of length ``config.omics_dim``, storing the
+      pre-computed omics feature vector for that example.
+
+  Output batch keys: ``inputs``, ``targets``, ``omics_inputs``
+    where ``omics_inputs`` has shape ``[batch, 1, omics_dim]``.
+
+  Packing is not supported; examples are padded/trimmed to ``max_target_length``.
+  """
+  if config.packing:
+    raise ValueError(
+        "omics_pretrain_preprocessing_pipeline does not support sequence packing. "
+        "Set packing=false in your config when use_omics=true."
+    )
+
+  assert len(data_columns) == 1
+  text_column = data_columns[0]
+
+  tokenizer_model, pad_id = data_processing_utils.get_tokenizer_and_pad_id(config)
+
+  # Parse text columns AND the omics float field from the serialised proto.
+  if config.grain_file_type in ("arrayrecord", "tfrecord"):
+    dataset = dataset.map(
+        input_pipeline_utils.ParseFeaturesWithOmics(data_columns, tokenize, config.omics_dim)
+    )
+    dataset = dataset.map(
+        input_pipeline_utils.NormalizeFeatures(data_columns, tokenize, passthrough_keys=("omics_inputs",))
+    )
+  else:
+    # Parquet / HuggingFace datasets: keep the text columns plus omics_inputs.
+    all_columns = list(data_columns) + ["omics_inputs"]
+    dataset = dataset.map(
+        input_pipeline_utils.KeepFeatures(feature_names=all_columns, tokenize=tokenize)
+    )
+
+  if tokenize:
+    dataset = dataset.map(
+        grain_tokenizer.TokenizeAndTrim(text_column, config.max_target_length, tokenizer_model)
+    )
+
+  # Rekey text column to ("inputs", "targets"); omics_inputs survives because
+  # Rekey only removes the mapped source keys, leaving other keys untouched.
+  rekey_dict = {"inputs": text_column, "targets": text_column}
+  dataset = dataset.map(input_pipeline_utils.Rekey(rekey_dict))
+
+  batch_size = data_processing_utils.get_local_batch_size(config)
+
+  # Pad / trim text keys to max_target_length, leaving omics_inputs unchanged.
+  dataset = dataset.map(
+      input_pipeline_utils.OmicsPassthroughPadOrTrim(config.max_target_length, pad_id)
+  )
+
+  if config.grain_use_elastic_iterator:
+    dataset = dataset.map(input_pipeline_utils.ShiftData(ignored_ids=[pad_id], axis=0))
+    return dataset
+
+  # Batch: text arrays become [B, T], omics_inputs becomes [B, 1, omics_dim].
+  batch_fn = functools.partial(grain.experimental.batch_and_pad, batch_size=batch_size, pad_value=pad_id)
+  dataset = dataset.batch(batch_size, batch_fn=batch_fn)
+  dataset = dataset.map(input_pipeline_utils.ShiftData(ignored_ids=[pad_id], axis=1))
+
+  dataset = data_processing_utils.apply_multiprocessing_and_prefetch(
+      dataset, config, grain_worker_count, grain_per_worker_buffer_size
+  )
+  return dataset
+
+
 def dpo_preprocessing_pipeline(
     dataset,
     config,
@@ -372,6 +454,8 @@ def _get_pipeline_fn(config):
     return dpo_preprocessing_pipeline
   if config.use_sft:
     return sft_preprocessing_pipeline
+  if getattr(config, "use_omics", False):
+    return omics_pretrain_preprocessing_pipeline
   return pretrain_preprocessing_pipeline
 
 

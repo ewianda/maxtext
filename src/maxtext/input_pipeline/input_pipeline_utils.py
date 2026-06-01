@@ -543,18 +543,116 @@ class ParseFeatures(grain.MapTransform):
 
 
 @dataclasses.dataclass
+class ParseFeaturesWithOmics(grain.MapTransform):
+  """Parse serialized tf.train.Example protos, extracting text columns plus omics_inputs.
+
+  This extends the behaviour of ParseFeatures by also reading an ``omics_inputs``
+  float field from the proto (if present) and reshaping it to ``[1, omics_dim]``
+  so that batching produces ``[batch, 1, omics_dim]`` tensors.  When the field is
+  absent a zero vector is used as a placeholder.
+
+  Args:
+    data_columns: Text feature column names to extract.
+    tokenize: If True the columns contain raw bytes (text); if False they
+      contain pre-tokenized int64 token IDs.
+    omics_dim: Expected length of the flat omics float vector stored in the
+      proto.  The vector is reshaped to ``[1, omics_dim]`` per example.
+  """
+
+  def __init__(self, data_columns, tokenize, omics_dim: int):
+    self.data_columns = data_columns
+    self.tokenize = tokenize
+    self.omics_dim = omics_dim
+
+  def map(self, element):
+    """Parse a serialized tf.train.Example proto and extract features + omics."""
+    example = example_pb2.Example()
+    example.ParseFromString(element)
+    features = example.features.feature
+
+    missing = [c for c in self.data_columns if c not in features]
+    if missing:
+      raise ValueError(
+          f"Column {missing} not found in dataset. Available columns: {sorted(features.keys())}. "
+          "Please set train_data_columns or eval_data_columns accordingly."
+      )
+
+    parsed = {}
+    for col in self.data_columns:
+      f = features[col]
+      if self.tokenize:
+        if not f.bytes_list.value:
+          raise ValueError(
+              f"tokenize_data=True but column '{col}' has no text (bytes) data. "
+              "Set tokenize_train_data or tokenize_eval_data to False if your dataset is already tokenized."
+          )
+        parsed[col] = np.array(f.bytes_list.value, dtype=object)
+      else:
+        if not f.int64_list.value:
+          raise ValueError(
+              f"tokenize_data=False but column '{col}' has no integer token data. "
+              "Set tokenize_train_data or tokenize_eval_data to True if your dataset needs tokenization."
+          )
+        parsed[col] = np.array(f.int64_list.value, dtype=np.int32)
+
+    # Parse the omics float field; fall back to a zero vector when absent.
+    if "omics_inputs" in features:
+      omics_flat = np.array(features["omics_inputs"].float_list.value, dtype=np.float32)
+      if omics_flat.size != self.omics_dim:
+        raise ValueError(
+            f"omics_inputs field has {omics_flat.size} floats but omics_dim={self.omics_dim}. "
+            "Check that config.omics_dim matches the dimension stored in your ArrayRecords."
+        )
+    else:
+      omics_flat = np.zeros(self.omics_dim, dtype=np.float32)
+    # Shape [1, omics_dim]: one omics token slot per example; batching gives [B, 1, omics_dim].
+    parsed["omics_inputs"] = omics_flat.reshape(1, self.omics_dim)
+    return parsed
+
+
+@dataclasses.dataclass
+class OmicsPassthroughPadOrTrim(grain.MapTransform):
+  """Pad/trim text keys while passing ``omics_inputs`` through unchanged.
+
+  ``PadOrTrimToMaxLength`` processes every key in the element dict, which would
+  corrupt the 2-D ``omics_inputs`` tensor (shape ``[1, omics_dim]``).  This
+  transform temporarily removes ``omics_inputs`` before delegating to
+  ``PadOrTrimToMaxLength``, then restores it.
+
+  Args:
+    max_length: Target sequence length for text columns.
+    pad_id: Padding token ID.
+  """
+
+  def __init__(self, max_length: int, pad_id: int = 0):
+    self._inner = PadOrTrimToMaxLength(max_length, pad_id)
+
+  def map(self, element: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+    omics = element.pop("omics_inputs", None)
+    result = self._inner.map(element)
+    if omics is not None:
+      result["omics_inputs"] = omics
+    return result
+
+
+@dataclasses.dataclass
 class NormalizeFeatures(grain.MapTransform):
   """Normalize text feature keys."""
 
-  def __init__(self, column_names, tokenize):
+  def __init__(self, column_names, tokenize, passthrough_keys=()):
     self.column_names = column_names
     self.tokenize = tokenize
+    self.passthrough_keys = passthrough_keys
 
   def map(self, element):
     if self.tokenize:
-      return {col: element[col][0].decode() for col in self.column_names}
+      result = {col: element[col][0].decode() for col in self.column_names}
     else:
-      return {col: element[col] for col in self.column_names}
+      result = {col: element[col] for col in self.column_names}
+    for key in self.passthrough_keys:
+      if key in element:
+        result[key] = element[key]
+    return result
 
 
 @dataclasses.dataclass

@@ -263,8 +263,9 @@ def _parse_args() -> argparse.Namespace:
   parser.add_argument("--steps", type=int, default=50)
   parser.add_argument("--log_every", type=int, default=10)
   parser.add_argument("--learning_rate", type=float, default=1e-4)
-  parser.add_argument("--omics_dim", type=int, default=20541,
-                      help="Full omics input dimension (must equal 1+expression+funomics+geneformer).")
+  parser.add_argument("--omics_dim", type=int, default=21287,
+                      help="Full omics input dimension (must equal 1+expression+funomics+geneformer). "
+                           "Default 21287 = 1 + 20006 (GENCODE v47 ∩ Geneformer V2) + 512 + 768.")
   parser.add_argument("--hidden_size", type=int, default=64,
                       help="LLM hidden dimension.  Use 4096 for Llama-2-7B.")
   parser.add_argument("--num_layers", type=int, default=2,

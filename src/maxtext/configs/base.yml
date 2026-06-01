@@ -1097,8 +1097,9 @@ temperature_tuning: false
 
 # Omics flags
 use_omics: false                 # Enable OmicsLM: inject projected omics vectors at <omics> token positions
-omics_dim: 20541                 # Raw omics vector dimension (1 + 19260 + 512 + 768 by default)
-omics_token_id: -1               # Token ID used as the <omics> placeholder (must be set when use_omics=true)
+omics_dim: 21287                 # Raw omics vector dimension (1 + 20006 + 512 + 768 for GENCODE v47 ∩ Geneformer V2)
+omics_token_id: -1               # Token ID used as the <omics> placeholder (must be set when use_omics=true;
+                                 # add <omics> as a special token to your tokenizer and record the resulting ID)
 omics_projection_gain: 0.01     # Gain for scaled Xavier initializer used in the omics projection layer
 
 # Multimodal flags
