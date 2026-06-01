@@ -326,7 +326,7 @@ class SFTPromptMasking(grain.MapTransform):
   For targets, if train on completion only, the prompt will be masked by unk_id. Otherwise the same as inputs.
   """
 
-  def __init__(self, text_column_name, completion_only, max_target_length, unk_id=0, passthrough_keys=()):
+  def __init__(self, text_column_name, completion_only, max_target_length, unk_id=0, *, passthrough_keys=()):
     self.text_column_name = text_column_name
     self.completion_only = completion_only
     self.max_target_length = max_target_length
