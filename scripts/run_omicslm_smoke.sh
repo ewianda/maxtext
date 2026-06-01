@@ -27,7 +27,7 @@
 #   LEARNING_RATE   learning rate           (default: 1e-4)
 #   HIDDEN_SIZE     LLM hidden dimension    (default: 64  — use 4096 for 7B)
 #   NUM_LAYERS      transformer layers      (default: 2)
-#   OMICS_DIM       omics input dimension   (default: 20541)
+#   OMICS_DIM       omics input dimension   (default: 21287)
 #   OUTPUT_DIR      checkpoint output path  (default: /tmp/omicslm_out)
 #
 # Usage:
@@ -47,7 +47,7 @@ SEQ_LEN="${SEQ_LEN:-64}"
 LEARNING_RATE="${LEARNING_RATE:-1e-4}"
 HIDDEN_SIZE="${HIDDEN_SIZE:-64}"
 NUM_LAYERS="${NUM_LAYERS:-2}"
-OMICS_DIM="${OMICS_DIM:-20541}"
+OMICS_DIM="${OMICS_DIM:-21287}"
 OUTPUT_DIR="${OUTPUT_DIR:-/tmp/omicslm_out}"
 
 # Activate virtualenv if it exists; otherwise assume the environment is already set up.

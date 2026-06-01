@@ -88,7 +88,7 @@ python scripts/run_omicslm_train.py \
     --learning_rate 5e-5 \
     --hidden_size 4096 \
     --num_layers 32 \
-    --omics_dim 20541 \
+    --omics_dim 21287 \
     --output_dir /path/to/output
 ```
 
@@ -104,7 +104,7 @@ Full list of Python CLI flags:
 | `--hidden_size` | `64` | LLM embedding/hidden dimension |
 | `--num_layers` | `2` | Number of transformer layers |
 | `--vocab_size` | `1024` | Vocabulary size |
-| `--omics_dim` | `20541` | Omics input vector dimension (`1 + 19260 + 512 + 768`) |
+| `--omics_dim` | `21287` | Omics input vector dimension (`1 + 20006 + 512 + 768`) |
 | `--omics_token_id` | `32` | Token ID used as `<omics>` placeholder |
 | `--output_dir` | `/tmp/omicslm_out` | Directory for saving the checkpoint |
 
@@ -145,7 +145,7 @@ omics_vec = build_omics_vector(
     stats=stats,
     sample_type="single_cell",                       # or "bulk"
 )
-# omics_vec.shape == (20541,)
+# omics_vec.shape == (21287,)
 ```
 
 ---

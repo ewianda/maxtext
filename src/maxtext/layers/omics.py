@@ -50,7 +50,8 @@ class OmicsProjection(nn.Module):
   participates in MaxText's standard FSDP sharding rules.
 
   Attributes:
-    input_dim:   Dimensionality of the raw omics input (e.g. 20541).
+    input_dim:   Dimensionality of the raw omics input (e.g. 21287 for the
+                 GENCODE v47 ∩ Geneformer V2 panel: 1 + 20006 + 512 + 768).
     hidden_size: Dimensionality of the LLM embedding space.
     gain:        Scaling factor for the Xavier-uniform weight initializer.
     dtype:       Compute dtype (inherits from config dtype).

@@ -29,7 +29,7 @@ Usage (see scripts/README.md for full details):
         --seq_len 128 \
         --steps 200 \
         --learning_rate 1e-4 \
-        --omics_dim 20541 \
+        --omics_dim 21287 \
         --hidden_size 256 \
         --output_dir /tmp/omicslm_out
 """
