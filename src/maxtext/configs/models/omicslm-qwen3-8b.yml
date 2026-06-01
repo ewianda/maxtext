@@ -46,7 +46,7 @@ omics_dim: 21287
 #   3. Set this field to that integer.
 # The default of -1 is intentionally invalid so a misconfigured run fails
 # loudly instead of silently corrupting embeddings.
-omics_token_id: -1
+omics_token_id: 151669
 # Small gain keeps omics contributions near-zero at the start of training so
 # the backbone language model loss is not destabilised.
 omics_projection_gain: 0.01
