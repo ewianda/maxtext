@@ -40,7 +40,7 @@ Repository = "https://github.com/AI-Hypercomputer/maxtext.git"
 allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/maxtext", "src/dependencies"]
+packages = ["src/maxtext", "src/dependencies", "src/omicslm"]
 
 
 
