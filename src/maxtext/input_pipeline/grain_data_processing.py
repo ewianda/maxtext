@@ -448,10 +448,113 @@ def sft_preprocessing_pipeline(
   return dataset
 
 
+def omics_sft_preprocessing_pipeline(
+    dataset,
+    config,
+    data_columns,
+    tokenize,
+    grain_worker_count,
+    grain_per_worker_buffer_size,
+):
+  """Grain pipeline for OmicsLM SFT data with prompt/completion columns and ``omics_inputs``.
+
+  Combines the SFT prompt-masking logic (loss only on completion tokens) with
+  the omics passthrough logic so that the ``omics_inputs`` float field survives
+  all transforms and ends up in the output batch.
+
+  Expected record schema (tf.train.Example / ArrayRecord):
+    - Text columns (``data_columns``): ``prompt``/``completion``, ``question``/``answer``,
+      or a ``messages`` column — any layout accepted by ``_format_chat_template_grain``.
+    - ``omics_inputs``: FloatList of length ``config.omics_dim``.
+
+  Output batch keys: ``inputs``, ``targets``, ``omics_inputs``
+    where ``omics_inputs`` has shape ``[batch, 1, omics_dim]``.
+
+  Packing is not supported; examples are padded/trimmed to ``max_target_length``.
+  Loss is computed only on completion tokens when ``sft_train_on_completion_only=true``.
+  """
+  if config.packing:
+    raise ValueError(
+        "omics_sft_preprocessing_pipeline does not support sequence packing. "
+        "Set packing=false in your config when use_omics=true."
+    )
+
+  tokenizer_model, pad_id = data_processing_utils.get_tokenizer_and_pad_id(config)
+  base_tokenizer_model = tokenizer_model
+  tokenizer_model = getattr(tokenizer_model, "tokenizer", tokenizer_model)
+
+  data_processing_utils.validate_and_configure_sft_columns(
+      data_columns, tokenizer_model, getattr(config, "chat_template", None)
+  )
+
+  # Parse text columns AND the omics float field from the serialised proto.
+  if config.grain_file_type in ("arrayrecord", "tfrecord"):
+    dataset = dataset.map(
+        input_pipeline_utils.ParseFeaturesWithOmics(data_columns, tokenize, config.omics_dim)
+    )
+    dataset = dataset.map(
+        input_pipeline_utils.NormalizeFeatures(data_columns, tokenize, passthrough_keys=("omics_inputs",))
+    )
+  else:
+    # Parquet / HuggingFace datasets: keep the text columns plus omics_inputs.
+    all_columns = list(data_columns) + ["omics_inputs"]
+    dataset = dataset.map(
+        input_pipeline_utils.KeepFeatures(feature_names=all_columns, tokenize=tokenize)
+    )
+
+  # Build chat-template chunks; omics_inputs passes through as an extra key.
+  dataset = dataset.map(
+      functools.partial(_format_chat_template_grain, data_columns=data_columns, tokenizer_model=tokenizer_model)
+  )
+
+  if tokenize:
+    dataset = dataset.map(
+        functools.partial(
+            _tokenize_sft_chunks,
+            text_column_name=data_columns[0],
+            tokenizer_model=tokenizer_model,
+        )
+    )
+
+  # Mask prompt tokens in targets; carry omics_inputs through unchanged.
+  dataset = dataset.map(
+      input_pipeline_utils.SFTPromptMasking(
+          text_column_name=data_columns[0],
+          completion_only=config.sft_train_on_completion_only,
+          max_target_length=config.max_target_length,
+          unk_id=pad_id,
+          passthrough_keys=("omics_inputs",),
+      )
+  )
+
+  batch_size = data_processing_utils.get_local_batch_size(config)
+
+  # Pad / trim text keys to max_target_length, leaving omics_inputs unchanged.
+  dataset = dataset.map(
+      input_pipeline_utils.OmicsPassthroughPadOrTrim(config.max_target_length, pad_id)
+  )
+
+  if config.grain_use_elastic_iterator:
+    dataset = dataset.map(input_pipeline_utils.ShiftData(ignored_ids=[pad_id], axis=0))
+    return dataset
+
+  # Batch: text arrays become [B, T], omics_inputs becomes [B, 1, omics_dim].
+  batch_fn = functools.partial(grain.experimental.batch_and_pad, batch_size=batch_size, pad_value=pad_id)
+  dataset = dataset.batch(batch_size, batch_fn=batch_fn)
+  dataset = dataset.map(input_pipeline_utils.ShiftData(ignored_ids=[pad_id], axis=1))
+
+  dataset = data_processing_utils.apply_multiprocessing_and_prefetch(
+      dataset, config, grain_worker_count, grain_per_worker_buffer_size
+  )
+  return dataset
+
+
 def _get_pipeline_fn(config):
   """Returns the appropriate preprocessing pipeline function based on config."""
   if config.use_dpo:
     return dpo_preprocessing_pipeline
+  if getattr(config, "use_omics", False) and config.use_sft:
+    return omics_sft_preprocessing_pipeline
   if config.use_sft:
     return sft_preprocessing_pipeline
   if getattr(config, "use_omics", False):

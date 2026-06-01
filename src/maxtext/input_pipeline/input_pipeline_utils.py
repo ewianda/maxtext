@@ -326,11 +326,12 @@ class SFTPromptMasking(grain.MapTransform):
   For targets, if train on completion only, the prompt will be masked by unk_id. Otherwise the same as inputs.
   """
 
-  def __init__(self, text_column_name, completion_only, max_target_length, unk_id=0):
+  def __init__(self, text_column_name, completion_only, max_target_length, unk_id=0, passthrough_keys=()):
     self.text_column_name = text_column_name
     self.completion_only = completion_only
     self.max_target_length = max_target_length
     self.unk_id = unk_id
+    self.passthrough_keys = passthrough_keys
 
   def map(self, element):
     """
@@ -341,15 +342,21 @@ class SFTPromptMasking(grain.MapTransform):
       concatenated sequence is masked using `self.unk_id`.
     - If `self.completion_only` is `False`, the target sequence is
       identical to the input sequence.
+    Any keys listed in `self.passthrough_keys` are copied from the input
+    element into the output unchanged (e.g. ``omics_inputs``).
     """
     inputs, targets = [], []
     for i, text in enumerate(element[self.text_column_name]):
       inputs += text
       targets += [self.unk_id] * len(text) if self.completion_only and element["is_prompt"][i] else text
-    return {
+    result = {
         "inputs": np.asarray(inputs[: self.max_target_length], dtype=np.int32),
         "targets": np.asarray(targets[: self.max_target_length], dtype=np.int32),
     }
+    for key in self.passthrough_keys:
+      if key in element:
+        result[key] = element[key]
+    return result
 
 
 @dataclasses.dataclass

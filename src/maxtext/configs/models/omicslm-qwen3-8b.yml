@@ -57,6 +57,11 @@ grain_file_type: "arrayrecord"
 # grain_train_files: "gs://omicslm-batch-data/arrayrecord/omicslm-*.array_record"
 
 # ── Recommended fine-tuning settings ──────────────────────────────────────
+# For SFT (instruction-tuning) with prompt+completion ArrayRecords, set:
+#   use_sft: true
+#   sft_train_on_completion_only: true   # loss only on the completion tokens
+# The omics_sft_preprocessing_pipeline is selected automatically when both
+# use_omics and use_sft are true.
 # Freeze the backbone; only train the omics projection initially:
 # trainable_parameters_mask: ['.*omics_projection.*']
 learning_rate: 1.e-4
