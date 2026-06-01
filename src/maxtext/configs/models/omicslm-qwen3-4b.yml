@@ -1,0 +1,45 @@
+# Copyright 2024-2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# OmicsLM built on top of Qwen3-4B.
+#
+# Architecture: Qwen3-4B backbone + a trainable omics projection layer that
+# maps raw omics vectors (expression + FunOmics + Geneformer = 20541-dim) into
+# the LLM embedding space and injects them at <omics> placeholder positions.
+#
+# To fine-tune only the projection layer, set:
+#   trainable_parameters_mask: ['.*omics_projection.*']
+#
+# Backbone hyperparameters come from qwen3-4b.yml.
+
+include: "models/qwen3-4b.yml"
+
+# ── OmicsLM-specific settings ──────────────────────────────────────────────
+use_omics: true
+# Combined dimension: 1 (scale) + 19260 (expression) + 512 (FunOmics) + 768 (Geneformer)
+omics_dim: 20541
+# Token ID of the <omics> placeholder — must match the tokenizer used.
+# When using the bundled Qwen3 tokenizer, add <omics> as a special token and
+# set this to the resulting ID.  The default of -1 is intentionally invalid so
+# a misconfigured run fails loudly instead of silently corrupting embeddings.
+omics_token_id: -1
+# Small gain keeps omics contributions near-zero at the start of training so
+# the backbone language model loss is not destabilised.
+omics_projection_gain: 0.01
+
+# ── Recommended fine-tuning settings ──────────────────────────────────────
+# Freeze the backbone; only train the omics projection initially:
+# trainable_parameters_mask: ['.*omics_projection.*']
+learning_rate: 1.e-4
+warmup_steps_fraction: 0.05

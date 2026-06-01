@@ -130,6 +130,7 @@ class TransformerLinenPure(nn.Module):
       encoder_videos: None | jnp.ndarray = None,
       encoder_video_masks: None | jnp.ndarray = None,
       encoder_audios: None | jnp.ndarray = None,
+      omics_inputs: None | jnp.ndarray = None,
       enable_dropout=True,
       model_mode=MODEL_MODE_TRAIN,
       previous_chunk=None,
@@ -147,6 +148,8 @@ class TransformerLinenPure(nn.Module):
       true_length: (Optional) Prompt length before padding
       slot: (Optional) An integer representing the decode batch index selected
         for this request.
+      omics_inputs: (Optional) [batch, num_omics, omics_dim] raw omics vectors
+        for OmicsLM models; passed when config.use_omics is True.
     """
 
     if decoder_segment_ids is not None and model_mode == MODEL_MODE_AUTOREGRESSIVE:
@@ -187,7 +190,12 @@ class TransformerLinenPure(nn.Module):
       audio_masks = mm_processor.get_bidirectional_mask_audio(self.config, decoder_input_tokens)
 
     multimodal_input = None
-    if image_embeddings is not None or video_embeddings is not None or audio_embeddings is not None:
+    if (
+        image_embeddings is not None
+        or video_embeddings is not None
+        or audio_embeddings is not None
+        or (self.config.use_omics and omics_inputs is not None)
+    ):
       multimodal_input = MultimodalInput(
           image_embeddings=image_embeddings,
           image_masks=encoder_image_masks,
@@ -197,6 +205,7 @@ class TransformerLinenPure(nn.Module):
           audio_masks=audio_masks,
           bidirectional_mask=bidirectional_mask_image,
           bidirectional_mask_video=bidirectional_mask_video,
+          omics_raw_inputs=omics_inputs if self.config.use_omics else None,
       )
 
     logits, hidden_state, kv_caches = self.decoder(
@@ -444,6 +453,7 @@ class Transformer(nnx.Module):
       encoder_videos: jax.Array | None = None,
       encoder_video_masks: jax.Array | None = None,
       encoder_audios: jax.Array | None = None,
+      omics_inputs: jax.Array | None = None,
       enable_dropout=True,
       model_mode=MODEL_MODE_TRAIN,
       previous_chunk=None,
@@ -474,6 +484,7 @@ class Transformer(nnx.Module):
       nnx_method: Method to call on the NNX module (optional).
       kv_caches: List of KV caches for each attention layer, used when invoking from vLLM (optional).
       attention_metadata: Mapping to store attention metadata, used when invoking from vLLM (optional).
+      omics_inputs: [batch, num_omics, omics_dim] raw omics vectors for OmicsLM (optional).
 
     Returns:
       Logits from the Transformer model. Logits, hidden_state, kv_caches if called by vLLM.
@@ -515,7 +526,12 @@ class Transformer(nnx.Module):
       audio_masks = mm_processor.get_bidirectional_mask_audio(self.config, decoder_input_tokens)
 
     multimodal_input = None
-    if image_embeddings is not None or video_embeddings is not None or audio_embeddings is not None:
+    if (
+        image_embeddings is not None
+        or video_embeddings is not None
+        or audio_embeddings is not None
+        or (self.config.use_omics and omics_inputs is not None)
+    ):
       multimodal_input = MultimodalInput(
           image_embeddings=image_embeddings,
           image_masks=encoder_image_masks,
@@ -525,6 +541,7 @@ class Transformer(nnx.Module):
           audio_masks=audio_masks,
           bidirectional_mask=bidirectional_mask_image,
           bidirectional_mask_video=bidirectional_mask_video,
+          omics_raw_inputs=omics_inputs if self.config.use_omics else None,
       )
 
     mutable_collections = []
