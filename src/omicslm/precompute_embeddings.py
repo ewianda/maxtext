@@ -51,7 +51,7 @@ def main() -> None:
   args = parser.parse_args()
 
   loaded = np.load(args.expressions)
-  expressions = loaded["expressions"] if isinstance(loaded, np.lib.npyio.NpzFile) else loaded
+  expressions = loaded["expressions"] if hasattr(loaded, "files") and "expressions" in loaded.files else loaded
   outputs = precompute_embeddings(
       np.asarray(expressions),
       load_extractor(args.funomics_extractor),

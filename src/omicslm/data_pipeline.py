@@ -80,7 +80,7 @@ def build_omics_vector(
     sample_type: str,
     assume_library_normalized: bool | None = None,
 ) -> np.ndarray:
-  """Builds the full 20,541-dimensional OmicsLM input vector."""
+  """Builds the full OmicsLM input vector by concatenating scale, expression, and pretrained embedding features."""
   if assume_library_normalized is None:
     assume_library_normalized = sample_scale_indicator(sample_type) == 0.0
 
