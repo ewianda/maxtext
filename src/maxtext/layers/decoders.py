@@ -698,6 +698,11 @@ class Decoder(nn.Module):
       # OmicsLM: inject projected omics embeddings at <omics> placeholder positions.
       omics_raw = getattr(multimodal_input, "omics_raw_inputs", None)
       if omics_raw is not None and cfg.use_omics:
+        if cfg.omics_token_id < 0:
+          raise ValueError(
+              "use_omics=True requires a valid omics_token_id (>= 0). "
+              "Set omics_token_id in your config to the ID of the <omics> placeholder token."
+          )
         projected_omics = OmicsProjection(
             input_dim=cfg.omics_dim,
             hidden_size=cfg.emb_dim,
