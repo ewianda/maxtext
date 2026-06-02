@@ -625,13 +625,15 @@ class ParseFeaturesWithOmics(grain.MapTransform):
         omics_flat = np.frombuffer(f.bytes_list.value[0], dtype=np.float32).copy()
       else:
         omics_flat = np.zeros(self.omics_dim, dtype=np.float32)
-      if omics_flat.size != self.omics_dim:
+      if self.gene_mean is not None:
+        omics_flat = (np.log1p(omics_flat) - self.gene_mean[:omics_flat.size]) / max(self.global_std, 1e-8)
+      if omics_flat.size < self.omics_dim:
+        omics_flat = np.pad(omics_flat, (0, self.omics_dim - omics_flat.size), constant_values=0.0)
+      elif omics_flat.size > self.omics_dim:
         raise ValueError(
             f"{omics_key} field has {omics_flat.size} floats but omics_dim={self.omics_dim}. "
             "Check that config.omics_dim matches the dimension stored in your ArrayRecords."
         )
-      if self.gene_mean is not None:
-        omics_flat = (np.log1p(omics_flat) - self.gene_mean) / max(self.global_std, 1e-8)
     else:
       omics_flat = np.zeros(self.omics_dim, dtype=np.float32)
     # Shape [1, omics_dim]: one omics token slot per example; batching gives [B, 1, omics_dim].
