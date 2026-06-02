@@ -51,22 +51,29 @@ class OmicsLMForCausalLM(nn.Module):
         self.omics_token_id = self.tokenizer.convert_tokens_to_ids(OMICS_TOKEN)
 
         from safetensors import safe_open
-        with safe_open(f"{model_path}/model.safetensors", framework="pt") as f:
-            if "model.omics_projection.weight" in f.keys():
-                weight = f.get_tensor("model.omics_projection.weight")
-                bias = f.get_tensor("model.omics_projection.bias")
-                self.omics_dim = weight.shape[0]
-                self.hidden_size = weight.shape[1]
-                self.omics_projection = nn.Linear(self.omics_dim, self.hidden_size, bias=True)
-                self.omics_projection.weight.data = weight.T.contiguous()
-                self.omics_projection.bias.data = bias
-                dtype = torch.bfloat16 if self.device == "cuda" else torch.float32
-                self.omics_projection = self.omics_projection.to(dtype=dtype, device=self.device)
-                print(f"Loaded omics projection: [{self.omics_dim}] -> [{self.hidden_size}]")
-            else:
-                self.omics_projection = None
-                self.omics_dim = None
-                print("WARNING: No omics projection found in checkpoint")
+        import glob
+        st_files = sorted(glob.glob(f"{model_path}/model*.safetensors"))
+        omics_weight, omics_bias = None, None
+        for st_file in st_files:
+            with safe_open(st_file, framework="pt") as f:
+                if "model.omics_projection.weight" in f.keys():
+                    omics_weight = f.get_tensor("model.omics_projection.weight")
+                    omics_bias = f.get_tensor("model.omics_projection.bias")
+                    break
+        if omics_weight is not None:
+            weight, bias = omics_weight, omics_bias
+            self.omics_dim = weight.shape[0]
+            self.hidden_size = weight.shape[1]
+            self.omics_projection = nn.Linear(self.omics_dim, self.hidden_size, bias=True)
+            self.omics_projection.weight.data = weight.T.contiguous()
+            self.omics_projection.bias.data = bias
+            dtype = torch.bfloat16 if self.device == "cuda" else torch.float32
+            self.omics_projection = self.omics_projection.to(dtype=dtype, device=self.device)
+            print(f"Loaded omics projection: [{self.omics_dim}] -> [{self.hidden_size}]")
+        else:
+            self.omics_projection = None
+            self.omics_dim = None
+            print("WARNING: No omics projection found in checkpoint")
 
     @torch.no_grad()
     def generate(self, prompt: str, omics_vector: np.ndarray | None = None, max_new_tokens: int = 32) -> str:
@@ -80,8 +87,10 @@ class OmicsLMForCausalLM(nn.Module):
             inputs_embeds = embed_layer(input_ids)
 
             dtype = inputs_embeds.dtype
-            omics_tensor = torch.tensor(omics_vector, dtype=dtype, device=self.device).unsqueeze(0)
-            projected = self.omics_projection(omics_tensor.to(self.omics_projection.weight.dtype))
+            omics_tensor = torch.tensor(omics_vector, dtype=dtype, device=self.device)
+            if omics_tensor.shape[0] < self.omics_dim:
+                omics_tensor = torch.nn.functional.pad(omics_tensor, (0, self.omics_dim - omics_tensor.shape[0]))
+            projected = self.omics_projection(omics_tensor.unsqueeze(0).to(self.omics_projection.weight.dtype))
             projected = projected.to(dtype)
 
             omics_mask = (input_ids[0] == self.omics_token_id)
