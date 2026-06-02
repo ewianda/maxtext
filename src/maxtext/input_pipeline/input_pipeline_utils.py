@@ -667,6 +667,33 @@ class OmicsPassthroughPadOrTrim(grain.MapTransform):
 
 
 @dataclasses.dataclass
+class ReconstructPackedOmics(grain.MapTransform):
+  """Reshape packed flat omics vector back to [max_segments, omics_dim].
+
+  After grain's FirstFitPackIterDataset, ``omics_inputs`` is a flat 1D array
+  of concatenated omics vectors from multiple packed examples (padded to
+  ``max_segments * omics_dim``).  This transform reshapes it to
+  ``[max_segments, omics_dim]`` so the model's injection function can match
+  each vector to its ``<omics>`` placeholder token.
+
+  Also removes the packer's ``omics_inputs_segment_ids`` and
+  ``omics_inputs_positions`` fields since they're no longer needed after reshape.
+  """
+
+  def __init__(self, omics_dim: int, max_segments: int):
+    self.omics_dim = omics_dim
+    self.max_segments = max_segments
+
+  def map(self, element: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+    omics_flat = element.pop("omics_inputs", None)
+    element.pop("omics_inputs_segment_ids", None)
+    element.pop("omics_inputs_positions", None)
+    if omics_flat is not None:
+      element["omics_inputs"] = omics_flat.reshape(self.max_segments, self.omics_dim)
+    return element
+
+
+@dataclasses.dataclass
 class NormalizeFeatures(grain.MapTransform):
   """Normalize text feature keys."""
 
