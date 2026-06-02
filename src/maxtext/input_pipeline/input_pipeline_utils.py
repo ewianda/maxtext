@@ -590,29 +590,33 @@ class ParseFeaturesWithOmics(grain.MapTransform):
     features = example.features.feature
 
     missing = [c for c in self.data_columns if c not in features]
-    if missing:
+    if missing and "prompt" in features and "completion" in features:
+      prompt_text = features["prompt"].bytes_list.value[0].decode()
+      completion_text = features["completion"].bytes_list.value[0].decode()
+      parsed = {self.data_columns[0]: np.array([(prompt_text + " " + completion_text).encode()], dtype=object)}
+    elif missing:
       raise ValueError(
           f"Column {missing} not found in dataset. Available columns: {sorted(features.keys())}. "
           "Please set train_data_columns or eval_data_columns accordingly."
       )
-
-    parsed = {}
-    for col in self.data_columns:
-      f = features[col]
-      if self.tokenize:
-        if not f.bytes_list.value:
-          raise ValueError(
-              f"tokenize_data=True but column '{col}' has no text (bytes) data. "
-              "Set tokenize_train_data or tokenize_eval_data to False if your dataset is already tokenized."
-          )
-        parsed[col] = np.array(f.bytes_list.value, dtype=object)
-      else:
-        if not f.int64_list.value:
-          raise ValueError(
-              f"tokenize_data=False but column '{col}' has no integer token data. "
-              "Set tokenize_train_data or tokenize_eval_data to True if your dataset needs tokenization."
-          )
-        parsed[col] = np.array(f.int64_list.value, dtype=np.int32)
+    else:
+      parsed = {}
+      for col in self.data_columns:
+        f = features[col]
+        if self.tokenize:
+          if not f.bytes_list.value:
+            raise ValueError(
+                f"tokenize_data=True but column '{col}' has no text (bytes) data. "
+                "Set tokenize_train_data or tokenize_eval_data to False if your dataset is already tokenized."
+            )
+          parsed[col] = np.array(f.bytes_list.value, dtype=object)
+        else:
+          if not f.int64_list.value:
+            raise ValueError(
+                f"tokenize_data=False but column '{col}' has no integer token data. "
+                "Set tokenize_train_data or tokenize_eval_data to True if your dataset needs tokenization."
+            )
+          parsed[col] = np.array(f.int64_list.value, dtype=np.int32)
 
     # Parse the omics float field; fall back to a zero vector when absent.
     # Support both "omics" (legacy) and "omics_inputs" field names.
