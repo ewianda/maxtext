@@ -37,8 +37,8 @@ include: "models/qwen3-8b.yml"
 
 # ── OmicsLM-specific settings ──────────────────────────────────────────────
 use_omics: true
-# Combined dimension: 1 (scale) + 20006 (expression) + 512 (FunOmics) + 768 (Geneformer)
-omics_dim: 21287
+# Expression-only: 20006 genes (no Funomics/Geneformer in current ArrayRecords)
+omics_dim: 20006
 # Token ID of the <omics> placeholder — must match the tokenizer used.
 # Steps to set this correctly:
 #   1. Add <omics> as a special token to the Qwen3 tokenizer vocab.

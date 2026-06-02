@@ -293,7 +293,7 @@ def omics_pretrain_preprocessing_pipeline(
   # Parse text columns AND the omics float field from the serialised proto.
   if config.grain_file_type in ("arrayrecord", "tfrecord"):
     dataset = dataset.map(
-        input_pipeline_utils.ParseFeaturesWithOmics(data_columns, tokenize, config.omics_dim)
+        input_pipeline_utils.ParseFeaturesWithOmics(data_columns, tokenize, config.omics_dim, getattr(config, "omics_norm_stats_path", None) or None)
     )
     dataset = dataset.map(
         input_pipeline_utils.NormalizeFeatures(data_columns, tokenize, passthrough_keys=("omics_inputs",))
@@ -490,7 +490,7 @@ def omics_sft_preprocessing_pipeline(
   # Parse text columns AND the omics float field from the serialised proto.
   if config.grain_file_type in ("arrayrecord", "tfrecord"):
     dataset = dataset.map(
-        input_pipeline_utils.ParseFeaturesWithOmics(data_columns, tokenize, config.omics_dim)
+        input_pipeline_utils.ParseFeaturesWithOmics(data_columns, tokenize, config.omics_dim, getattr(config, "omics_norm_stats_path", None) or None)
     )
     dataset = dataset.map(
         input_pipeline_utils.NormalizeFeatures(data_columns, tokenize, passthrough_keys=("omics_inputs",))

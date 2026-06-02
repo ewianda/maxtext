@@ -566,10 +566,16 @@ class ParseFeaturesWithOmics(grain.MapTransform):
       proto.  The vector is reshaped to ``[1, omics_dim]`` per example.
   """
 
-  def __init__(self, data_columns, tokenize, omics_dim: int):
+  def __init__(self, data_columns, tokenize, omics_dim: int, omics_norm_stats_path: str | None = None):
     self.data_columns = data_columns
     self.tokenize = tokenize
     self.omics_dim = omics_dim
+    self.gene_mean = None
+    self.global_std = 1.0
+    if omics_norm_stats_path:
+      stats = np.load(omics_norm_stats_path)
+      self.gene_mean = stats["gene_mean"].astype(np.float32)
+      self.global_std = float(stats["global_std"])
 
   def map(self, element):
     """Parse a serialized tf.train.Example proto and extract features + omics."""
@@ -603,13 +609,23 @@ class ParseFeaturesWithOmics(grain.MapTransform):
         parsed[col] = np.array(f.int64_list.value, dtype=np.int32)
 
     # Parse the omics float field; fall back to a zero vector when absent.
-    if "omics_inputs" in features:
-      omics_flat = np.array(features["omics_inputs"].float_list.value, dtype=np.float32)
+    # Support both "omics" (legacy) and "omics_inputs" field names.
+    omics_key = "omics" if "omics" in features else "omics_inputs" if "omics_inputs" in features else None
+    if omics_key is not None:
+      f = features[omics_key]
+      if f.float_list.value:
+        omics_flat = np.array(f.float_list.value, dtype=np.float32)
+      elif f.bytes_list.value:
+        omics_flat = np.frombuffer(f.bytes_list.value[0], dtype=np.float32).copy()
+      else:
+        omics_flat = np.zeros(self.omics_dim, dtype=np.float32)
       if omics_flat.size != self.omics_dim:
         raise ValueError(
-            f"omics_inputs field has {omics_flat.size} floats but omics_dim={self.omics_dim}. "
+            f"{omics_key} field has {omics_flat.size} floats but omics_dim={self.omics_dim}. "
             "Check that config.omics_dim matches the dimension stored in your ArrayRecords."
         )
+      if self.gene_mean is not None:
+        omics_flat = (np.log1p(omics_flat) - self.gene_mean) / max(self.global_std, 1e-8)
     else:
       omics_flat = np.zeros(self.omics_dim, dtype=np.float32)
     # Shape [1, omics_dim]: one omics token slot per example; batching gives [B, 1, omics_dim].

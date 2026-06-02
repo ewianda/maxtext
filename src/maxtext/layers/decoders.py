@@ -696,6 +696,9 @@ class Decoder(nn.Module):
           raise ValueError(f"Unsupported model_name for audio: {cfg.model_name}")
 
       # OmicsLM: inject projected omics embeddings at <omics> placeholder positions.
+      # WARNING: OmicsProjection uses dense_general (Linen/NNX bridge) which has a
+      # checkpoint serialization bug — see OmicsProjection docstring in omics.py.
+      # The projection params are NOT saved to Orbax checkpoints.
       omics_raw = getattr(multimodal_input, "omics_raw_inputs", None)
       if omics_raw is not None and cfg.use_omics:
         if cfg.omics_token_id < 0:
