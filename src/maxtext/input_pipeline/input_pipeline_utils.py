@@ -573,7 +573,13 @@ class ParseFeaturesWithOmics(grain.MapTransform):
     self.gene_mean = None
     self.global_std = 1.0
     if omics_norm_stats_path:
-      stats = np.load(omics_norm_stats_path)
+      import io
+      if omics_norm_stats_path.startswith("gs://"):
+        import tensorflow as tf
+        raw = tf.io.gfile.GFile(omics_norm_stats_path, "rb").read()
+        stats = np.load(io.BytesIO(raw))
+      else:
+        stats = np.load(omics_norm_stats_path)
       self.gene_mean = stats["gene_mean"].astype(np.float32)
       self.global_std = float(stats["global_std"])
 

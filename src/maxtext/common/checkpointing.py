@@ -869,10 +869,22 @@ def load_state_if_possible(
         use_ocdbt=use_ocdbt,
         use_zarr3=use_zarr3,
     )
-    restored_params = jax.tree_util.tree_map(
-        lambda x: _default_for_sds(x) if isinstance(x, jax.ShapeDtypeStruct) else x,
-        restored_params,
-    )
+    # For params missing from the source checkpoint (e.g. omics_projection when
+    # loading a base model), materialize with random init instead of zeros.
+    # Zeros break symmetry-dependent layers like projections.
+    init_rng = jax.random.PRNGKey(42)
+    def _init_missing(x):
+      if not isinstance(x, jax.ShapeDtypeStruct):
+        return x
+      nonlocal init_rng
+      init_rng, key = jax.random.split(init_rng)
+      sharding = getattr(x, "sharding", None)
+      def _make():
+        return jax.random.normal(key, x.shape, dtype=x.dtype) * 0.01
+      if sharding is None:
+        return _make()
+      return jax.jit(_make, out_shardings=sharding)()
+    restored_params = jax.tree_util.tree_map(_init_missing, restored_params)
     return None, restored_params
   elif load_full_state_from_path != "":
     max_logging.log(f"Loading full state from path: {load_full_state_from_path}")
