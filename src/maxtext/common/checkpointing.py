@@ -869,6 +869,10 @@ def load_state_if_possible(
         use_ocdbt=use_ocdbt,
         use_zarr3=use_zarr3,
     )
+    restored_params = jax.tree_util.tree_map(
+        lambda x: _default_for_sds(x) if isinstance(x, jax.ShapeDtypeStruct) else x,
+        restored_params,
+    )
     return None, restored_params
   elif load_full_state_from_path != "":
     max_logging.log(f"Loading full state from path: {load_full_state_from_path}")

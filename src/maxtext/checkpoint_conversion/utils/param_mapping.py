@@ -619,6 +619,8 @@ def QWEN_MAXTEXT_TO_HF_PARAM_MAPPING(config, maxtext_config, scan_layers=False):
       "params-token_embedder-embedding": "model.embed_tokens.weight",
       "params-decoder-decoder_norm-scale": "model.norm.weight",
       "params-decoder-logits_dense-kernel": "lm_head.weight",
+      "params-decoder-omics_projection-omics_kernel-kernel": "model.omics_projection.weight",
+      "params-decoder-omics_projection-omics_kernel-bias": "model.omics_projection.bias",
   }
 
   if scan_layers:
