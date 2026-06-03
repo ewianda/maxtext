@@ -130,14 +130,18 @@ def inject_omics_embeddings(
 
   placeholder_counts = placeholder_mask.sum(axis=1)
   omics_counts = omics_mask.sum(axis=1)
-  if not any(isinstance(x, jax.core.Tracer) for x in jax.tree_util.tree_leaves((placeholder_counts, omics_counts))):
+  try:
     placeholder_counts_np = np.asarray(placeholder_counts)
     omics_counts_np = np.asarray(omics_counts)
-    if not np.array_equal(placeholder_counts_np, omics_counts_np):
-      raise ValueError(
-          "Each sequence must provide exactly one projected omics vector for every <omics> placeholder. "
-          f"Got placeholders={placeholder_counts_np.tolist()} and omics={omics_counts_np.tolist()}."
-      )
+  except jax.errors.ConcretizationTypeError:
+    placeholder_counts_np = None
+    omics_counts_np = None
+
+  if placeholder_counts_np is not None and not np.array_equal(placeholder_counts_np, omics_counts_np):
+    raise ValueError(
+        "Each sequence must provide exactly one projected omics vector for every <omics> placeholder. "
+        f"Got placeholders={placeholder_counts_np.tolist()} and omics={omics_counts_np.tolist()}."
+    )
 
   def _inject_row(text_row, placeholder_row, omics_row, omics_row_mask):
     order = jnp.argsort(-omics_row_mask.astype(jnp.int32))

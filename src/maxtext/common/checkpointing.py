@@ -876,9 +876,8 @@ def load_state_if_possible(
     def _init_missing(path, x):
       if not isinstance(x, jax.ShapeDtypeStruct):
         return x
-      path_str = "/".join(str(k) for k in path)
       sharding = getattr(x, "sharding", None)
-      if "omics_projection" in path_str:
+      if any("omics_projection" in str(key) for key in path):
         nonlocal init_rng
         init_rng, key = jax.random.split(init_rng)
 
