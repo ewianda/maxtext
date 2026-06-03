@@ -869,22 +869,34 @@ def load_state_if_possible(
         use_ocdbt=use_ocdbt,
         use_zarr3=use_zarr3,
     )
-    # For params missing from the source checkpoint (e.g. omics_projection when
-    # loading a base model), materialize with random init instead of zeros.
-    # Zeros break symmetry-dependent layers like projections.
+    # For params missing from the source checkpoint, keep the historical zero
+    # fallback except for omics_projection weights, which need a small random
+    # init when loading a base model without omics support.
     init_rng = jax.random.PRNGKey(42)
-    def _init_missing(x):
+    def _init_missing(path, x):
       if not isinstance(x, jax.ShapeDtypeStruct):
         return x
-      nonlocal init_rng
-      init_rng, key = jax.random.split(init_rng)
+      path_str = "/".join(str(k) for k in path)
       sharding = getattr(x, "sharding", None)
-      def _make():
-        return jax.random.normal(key, x.shape, dtype=x.dtype) * 0.01
+      if "omics_projection" in path_str:
+        nonlocal init_rng
+        init_rng, key = jax.random.split(init_rng)
+
+        def _make():
+          return jax.random.normal(key, x.shape, dtype=x.dtype) * 0.01
+
+        if sharding is None:
+          return _make()
+        return jax.jit(_make, out_shardings=sharding)()
+
+      def _make_zeros():
+        return jnp.zeros(x.shape, dtype=x.dtype)
+
       if sharding is None:
-        return _make()
-      return jax.jit(_make, out_shardings=sharding)()
-    restored_params = jax.tree_util.tree_map(_init_missing, restored_params)
+        return _make_zeros()
+      return jax.jit(_make_zeros, out_shardings=sharding)()
+
+    restored_params = jax.tree_util.tree_map_with_path(_init_missing, restored_params)
     return None, restored_params
   elif load_full_state_from_path != "":
     max_logging.log(f"Loading full state from path: {load_full_state_from_path}")
