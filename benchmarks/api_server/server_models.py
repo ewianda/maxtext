@@ -67,6 +67,7 @@ class CompletionRequest(SamplingParams):
   prompt: Union[str, List[str], List[int], List[List[int]]]
   echo: Optional[bool] = False
   logprobs: Optional[int] = None
+  omics_vector: Optional[str] = None
 
   @field_validator("logprobs")
   @classmethod
@@ -196,6 +197,7 @@ class ChatCompletionRequest(SamplingParams):
   messages: List[ChatMessage]
   logprobs: Optional[bool] = False
   top_logprobs: Optional[int] = None
+  omics_vector: Optional[str] = None
 
 
 class ChatCompletionChoice(BaseModel):

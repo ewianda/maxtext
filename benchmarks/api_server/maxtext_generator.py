@@ -20,6 +20,7 @@ autoregressive decoding steps. It handles batching, sampling, and the
 low-level details of running inference on TPUs.
 """
 
+import base64
 from io import StringIO
 from typing import Sequence, Optional, List, Union
 import logging
@@ -96,6 +97,7 @@ class GenerationStream:
   tokens: np.ndarray
   true_length: int
   image: Optional[np.ndarray]
+  omics_inputs: Optional[np.ndarray] = None
 
   # Output accumulators
   generated_ids: List[int] = field(default_factory=list)
@@ -186,6 +188,7 @@ class MaxTextGenerator:
       self,
       prompts: List[str],
       image_paths: Optional[List[Optional[str]]] = None,
+      omics_vectors: Optional[List[Optional[np.ndarray]]] = None,
       max_tokens: int = None,
       logprobs: int = None,
       echo: bool = False,
@@ -201,6 +204,9 @@ class MaxTextGenerator:
     Args:
         prompts: A list of prompt strings.
         image_paths: An optional list of image paths, one for each prompt.
+        omics_vectors: Optional per-prompt omics vectors. Clients are expected
+            to send pre-normalized vectors; the server only decodes base64 and
+            pads them to `config.omics_dim`.
         max_tokens: The maximum number of tokens to generate.
         logprobs: The number of top log probabilities to return for each token.
         echo: Whether to include the prompt in the generated text.
@@ -217,18 +223,23 @@ class MaxTextGenerator:
       image_paths = [None] * len(prompts)
     if len(prompts) != len(image_paths):
       raise ValueError("The number of prompts must equal the number of image paths.")
+    if omics_vectors is None:
+      omics_vectors = [None] * len(prompts)
+    if len(prompts) != len(omics_vectors):
+      raise ValueError("The number of prompts must equal the number of omics vectors.")
 
     all_results = []
     num_prompts = len(prompts)
     for i in range(0, num_prompts, self.batch_size):
       prompt_chunk = prompts[i : i + self.batch_size]
       image_chunk = image_paths[i : i + self.batch_size]
+      omics_chunk = omics_vectors[i : i + self.batch_size]
 
       # chunk_count = (i // self.batch_size) + 1
       # total_chunks = (num_prompts + self.batch_size - 1) // self.batch_size
 
       chunk_results = self._process_chunk(
-          prompt_chunk, image_chunk, max_tokens, logprobs, echo, stop, temperature, seed, top_k, top_p
+          prompt_chunk, image_chunk, omics_chunk, max_tokens, logprobs, echo, stop, temperature, seed, top_k, top_p
       )
       all_results.extend(chunk_results)
 
@@ -238,6 +249,7 @@ class MaxTextGenerator:
       self,
       prompts: List[str],
       image_paths: List[Optional[str]],
+      omics_vectors: List[Optional[np.ndarray]],
       max_tokens: int,
       logprobs: int = None,
       echo: bool = False,
@@ -256,7 +268,7 @@ class MaxTextGenerator:
     initialize_start_time = time.time()
     # Reset the state to handle the new batch while reusing memory.
     self.decode_state = self._jitted_reset_state(self.decode_state)
-    streams, rng = self._initialize_streams_and_state(prompts, image_paths, seed)
+    streams, rng = self._initialize_streams_and_state(prompts, image_paths, omics_vectors, seed)
     initialize_end_time = time.time()
     self.logger.info(
         "Initialization complete in %.2f seconds. Max batch size: %d",
@@ -291,14 +303,21 @@ class MaxTextGenerator:
     self.logger.info("Processed %d prompts in %.2fs.", len(prompts), end_time - start_time)
     return completions
 
-  def _initialize_streams_and_state(self, prompts, image_paths, seed):
+  def _initialize_streams_and_state(self, prompts, image_paths, omics_vectors, seed):
     """Tokenizes inputs, sets up stream objects, and initializes the decode state."""
     prefill_length = getattr(self.config, "max_prefill_predict_length", 1024)
     streams = []
-    for prompt, image_path in zip(prompts, image_paths):
+    for prompt, image_path, omics_vector in zip(prompts, image_paths, omics_vectors):
       toks, tlen, imgs = self._preprocess_inputs(prompt, prefill_length, image_path)
       assert tlen <= prefill_length, f"Input token length {tlen} is > {prefill_length}"
-      streams.append(GenerationStream(tokens=toks, true_length=tlen, image=imgs))
+      streams.append(
+          GenerationStream(
+              tokens=toks,
+              true_length=tlen,
+              image=imgs,
+              omics_inputs=self._prepare_omics_input(omics_vector),
+          )
+      )
 
     if seed is not None:
       rng = jax.random.PRNGKey(seed)
@@ -331,12 +350,16 @@ class MaxTextGenerator:
     for i, stream in enumerate(streams):
       rng, rng_prefill = jax.random.split(rng)
       want_prompt_logp = logprobs is not None and echo
+      prepared_omics = None
+      if stream.omics_inputs is not None:
+        prepared_omics = jnp.asarray(stream.omics_inputs, dtype=jnp.float32).reshape(1, 1, -1)
 
       prefill_result, _ = self.engine.prefill(
           params=self.params,
           padded_tokens=stream.tokens,
           true_length=stream.true_length,
           images=stream.image,
+          omics_inputs=prepared_omics,
           rng=rng_prefill,
           slot=i,
           return_prompt_logp=want_prompt_logp,
@@ -515,6 +538,24 @@ class MaxTextGenerator:
       true_length += mm_processor.get_image_offsets(config=self.config, processor_output=processor_output)
 
     return tokens, true_length, images
+
+  def _prepare_omics_input(self, omics_vector) -> Optional[np.ndarray]:
+    """Decode a pre-normalized omics vector and pad it to config.omics_dim."""
+    if omics_vector is None:
+      return None
+
+    if isinstance(omics_vector, str):
+      omics_bytes = base64.b64decode(omics_vector)
+      vector = np.frombuffer(omics_bytes, dtype=np.float32)
+    else:
+      vector = np.asarray(omics_vector, dtype=np.float32).reshape(-1)
+
+    omics_dim = int(self.config.omics_dim)
+    if vector.size > omics_dim:
+      raise ValueError(f"Omics vector has {vector.size} values, which exceeds omics_dim={omics_dim}.")
+    if vector.size < omics_dim:
+      vector = np.pad(vector, (0, omics_dim - vector.size))
+    return np.asarray(vector, dtype=np.float32)
 
   def _validate_config(self, config):
     """Validates configuration."""
