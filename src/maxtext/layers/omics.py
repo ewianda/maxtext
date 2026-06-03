@@ -130,6 +130,8 @@ def inject_omics_embeddings(
 
   placeholder_counts = placeholder_mask.sum(axis=1)
   omics_counts = omics_mask.sum(axis=1)
+  # This validation is best-effort for eager execution. During tracing we skip
+  # the Python exception path so the injection logic remains JIT-compatible.
   try:
     placeholder_counts_np = np.asarray(placeholder_counts)
     omics_counts_np = np.asarray(omics_counts)

@@ -873,11 +873,11 @@ def load_state_if_possible(
     # fallback except for omics_projection weights, which need a small random
     # init when loading a base model without omics support.
     init_rng = jax.random.PRNGKey(42)
-    def _init_missing(path, x):
+    def _init_missing(param_path, x):
       if not isinstance(x, jax.ShapeDtypeStruct):
         return x
       sharding = getattr(x, "sharding", None)
-      if any("omics_projection" in str(key) for key in path):
+      if any("omics_projection" in str(key) for key in param_path):
         nonlocal init_rng
         init_rng, key = jax.random.split(init_rng)
 
