@@ -350,15 +350,16 @@ class MaxTextGenerator:
     for i, stream in enumerate(streams):
       rng, rng_prefill = jax.random.split(rng)
       want_prompt_logp = logprobs is not None and echo
+      prepared_omics = None
+      if stream.omics_inputs is not None:
+        prepared_omics = jnp.asarray(stream.omics_inputs, dtype=jnp.float32).reshape(1, 1, -1)
 
       prefill_result, _ = self.engine.prefill(
           params=self.params,
           padded_tokens=stream.tokens,
           true_length=stream.true_length,
           images=stream.image,
-          omics_inputs=None
-          if stream.omics_inputs is None
-          else jnp.asarray(stream.omics_inputs, dtype=jnp.float32).reshape(1, 1, -1),
+          omics_inputs=prepared_omics,
           rng=rng_prefill,
           slot=i,
           return_prompt_logp=want_prompt_logp,

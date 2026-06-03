@@ -318,7 +318,7 @@ def _prepare_batch_for_broadcast(batched_items):
     is_chat = isinstance(req, ChatCompletionRequest)
     prompts_for_req = server_utils.get_prompts_for_request(req, LLM)
     all_prompts.extend(prompts_for_req)
-    params["omics_vectors"].extend([getattr(req, "omics_vector", None)] * len(prompts_for_req))
+    params["omics_vectors"].extend(getattr(req, "omics_vector", None) for _ in range(len(prompts_for_req)))
     request_info_map.append((req_id, req, is_chat, len(prompts_for_req)))
 
   broadcast_payload = {"prompts": all_prompts, "params": params}
