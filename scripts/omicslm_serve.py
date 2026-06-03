@@ -104,6 +104,8 @@ class OmicsLMForCausalLM(nn.Module):
                 attention_mask=attention_mask,
                 max_new_tokens=max_new_tokens,
                 do_sample=False,
+                eos_token_id=self.tokenizer.eos_token_id,
+                repetition_penalty=1.2,
             )
         else:
             output = self.backbone.generate(
@@ -111,6 +113,8 @@ class OmicsLMForCausalLM(nn.Module):
                 attention_mask=attention_mask,
                 max_new_tokens=max_new_tokens,
                 do_sample=False,
+                eos_token_id=self.tokenizer.eos_token_id,
+                repetition_penalty=1.2,
             )
 
         return self.tokenizer.decode(output[0][prompt_len:], skip_special_tokens=True)
@@ -172,10 +176,10 @@ def main():
                 vec = None
 
             # With omics
-            output_with = model.generate(prompt, omics_vector=vec, max_new_tokens=16)
+            output_with = model.generate(prompt, omics_vector=vec, max_new_tokens=64)
             # Without omics (baseline)
             prompt_no_omics = prompt.replace(" <omics>", "").replace("<omics> ", "").replace("<omics>", "")
-            output_without = model.generate(prompt_no_omics, max_new_tokens=16)
+            output_without = model.generate(prompt_no_omics, max_new_tokens=64)
 
             print(f"\n--- Record {idx} ---")
             print(f"Prompt:   {prompt}")
