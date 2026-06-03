@@ -1,11 +1,11 @@
-# OmicsLM built on top of Qwen3-4B.
+# OmicsLM built on top of Qwen3-0.6B (test/development config).
 
-# Qwen3-4B backbone
-base_emb_dim: 2560
-base_num_query_heads: 32
+# Qwen3-0.6B backbone
+base_emb_dim: 1024
+base_num_query_heads: 16
 base_num_kv_heads: 8
-base_mlp_dim: 9728
-base_num_decoder_layers: 36
+base_mlp_dim: 3072
+base_num_decoder_layers: 28
 head_dim: 128
 mlp_activations: ["silu", "linear"]
 vocab_size: 151936
@@ -35,5 +35,5 @@ packing: false
 tokenize_train_data: true
 train_data_columns: ['prompt', 'completion']
 
-learning_rate: 5.e-5
+learning_rate: 1.e-4
 warmup_steps_fraction: 0.05

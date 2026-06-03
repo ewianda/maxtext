@@ -404,12 +404,12 @@ def main(argv: Sequence[str]) -> None:
   # Validate architecture consistency (raising ValueError on mismatch) or override HF config if specified.
   _validate_or_update_architecture(hf_config_obj, config, override=FLAGS.override_model_architecture)
 
-  # 2. Load Tokenizer
+  # 2. Load Tokenizer — prefer local tokenizer_path (may have custom tokens like <omics>)
   if model_key not in HF_IDS:
     raise ValueError(f"HF Tokenizer ID not found for model key: {model_key}")
   hf_token = config.hf_access_token
-  hf_tokenizer_id = HF_IDS[model_key]
-  tokenizer = AutoTokenizer.from_pretrained(hf_tokenizer_id, token=hf_token)
+  tokenizer_source = getattr(config, "tokenizer_path", None) or HF_IDS[model_key]
+  tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, token=hf_token)
 
   # For multi-modal case:
   processor = AutoProcessor.from_pretrained(hf_tokenizer_id, token=hf_token) if config.use_multimodal else None

@@ -28,14 +28,14 @@ import jax
 import jax.numpy as jnp
 from flax import linen as nn
 
-from maxtext.layers.linears import DenseGeneral
+from maxtext.layers.linears import dense_general
 
 
 def _scaled_xavier_uniform(gain: float):
-  """Returns an initializer that scales xavier_uniform by *gain*."""
+  """Returns an NdInitializer that scales xavier_uniform by *gain*."""
   base = nn.initializers.xavier_uniform()
 
-  def init(key, shape, dtype=jnp.float32):
+  def init(key, shape, dtype=jnp.float32, in_axis=0, out_axis=1):
     return gain * base(key, shape, dtype)
 
   return init
@@ -49,9 +49,33 @@ class OmicsProjection(nn.Module):
   of training.  The kernel is annotated with the 'embed' axis so that it
   participates in MaxText's standard FSDP sharding rules.
 
+  KNOWN ISSUE (Linen/NNX bridge):
+    This layer uses ``dense_general`` (the Linen-bridged NNX wrapper from
+    ``maxtext.layers.linears``) because the Decoder that hosts it is a Linen
+    ``nn.Module``. The NNX ``DenseGeneral`` class cannot be used directly here
+    because it requires explicit ``rngs=`` at construction time, which the
+    Linen ``@nn.compact`` scope does not provide.
+
+    However, ``dense_general`` wraps the NNX ``DenseGeneral`` via
+    ``nnx.bridge.to_linen``, and params created through this bridge are NOT
+    captured by the Orbax checkpoint manager. This means:
+
+      - Training works: the projection has params, receives gradients, and the
+        loss converges.
+      - Checkpointing silently drops the projection weights: the saved Orbax
+        checkpoint contains zero omics-related params.
+      - Inference from a checkpoint produces a randomly-initialized projection.
+      - The ``to_huggingface`` converter also silently drops these params.
+
+    To fix this, the projection should either:
+      (a) Use a pure Linen ``nn.Dense`` instead of the NNX bridge, or
+      (b) Be initialized in the Decoder's ``setup()`` so its params are in
+          the init tree before ``@nn.compact`` runs, or
+      (c) The Decoder should be migrated to pure NNX (``pure_nnx=True``).
+
   Attributes:
-    input_dim:   Dimensionality of the raw omics input (e.g. 21287 for the
-                 GENCODE v47 ∩ Geneformer V2 panel: 1 + 20006 + 512 + 768).
+    input_dim:   Dimensionality of the raw omics input (default 20006 for
+                 expression-only from GENCODE v47 intersect Geneformer V2).
     hidden_size: Dimensionality of the LLM embedding space.
     gain:        Scaling factor for the Xavier-uniform weight initializer.
     dtype:       Compute dtype (inherits from config dtype).
@@ -74,7 +98,9 @@ class OmicsProjection(nn.Module):
     Returns:
       Projected array of shape [batch, num_omics, hidden_size].
     """
-    return DenseGeneral(
+    # TODO: Replace with pure Linen nn.Dense to fix checkpoint serialization.
+    # See class docstring for the Linen/NNX bridge issue.
+    return dense_general(
         in_features_shape=self.input_dim,
         out_features_shape=self.hidden_size,
         axis=-1,
