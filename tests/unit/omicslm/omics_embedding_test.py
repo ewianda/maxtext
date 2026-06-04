@@ -3,7 +3,7 @@ from __future__ import annotations
 import jax.numpy as jnp
 import pytest
 
-from omicslm.omics_embedding import inject_omics_embeddings
+from maxtext.layers.omics import inject_omics_embeddings
 
 
 def test_inject_omics_embeddings_replaces_multiple_placeholders_in_order():
