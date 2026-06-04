@@ -17,6 +17,7 @@
 import glob
 from pathlib import Path
 import functools
+import numpy as np
 import ml_collections
 from concurrent import futures
 import json
@@ -275,7 +276,8 @@ def omics_pretrain_preprocessing_pipeline(
       pre-computed omics feature vector for that example.
 
   Output batch keys: ``inputs``, ``targets``, ``omics_inputs``
-    where ``omics_inputs`` has shape ``[batch, 1, omics_dim]``.
+    where ``omics_inputs`` has shape ``[batch, 1, omics_dim]`` (without packing)
+    or ``[batch, max_segments, omics_dim]`` (with packing).
 
   When ``config.packing=true``, uses grain's FirstFitPackIterDataset to pack
   multiple short examples into one sequence.  The ``omics_inputs`` field is
@@ -322,10 +324,10 @@ def omics_pretrain_preprocessing_pipeline(
   batch_size = data_processing_utils.get_local_batch_size(config)
 
   if config.packing:
-    # Flatten omics_inputs from [1, omics_dim] to [omics_dim] for the packer.
-    dataset = dataset.map(lambda el: {**el, "omics_inputs": el["omics_inputs"].ravel()})
+    # Flatten omics_inputs to [omics_dim] for the packer; coerce to array for non-proto sources.
+    dataset = dataset.map(lambda el: {**el, "omics_inputs": np.asarray(el["omics_inputs"]).ravel()})
 
-    max_segments = config.max_segments_per_seq if config.max_segments_per_seq > 0 else 16
+    max_segments = config.max_segments_per_seq if config.max_segments_per_seq is not None and config.max_segments_per_seq > 0 else 16
     length_struct = {
         "inputs": config.max_target_length,
         "targets": config.max_target_length,
@@ -556,10 +558,10 @@ def omics_sft_preprocessing_pipeline(
   batch_size = data_processing_utils.get_local_batch_size(config)
 
   if config.packing:
-    # Flatten omics_inputs from [1, omics_dim] to [omics_dim] for the packer.
-    dataset = dataset.map(lambda el: {**el, "omics_inputs": el["omics_inputs"].ravel()})
+    # Flatten omics_inputs to [omics_dim] for the packer; coerce to array for non-proto sources.
+    dataset = dataset.map(lambda el: {**el, "omics_inputs": np.asarray(el["omics_inputs"]).ravel()})
 
-    max_segments = config.max_segments_per_seq if config.max_segments_per_seq > 0 else 16
+    max_segments = config.max_segments_per_seq if config.max_segments_per_seq is not None and config.max_segments_per_seq > 0 else 16
     length_struct = {
         "inputs": config.max_target_length,
         "targets": config.max_target_length,
