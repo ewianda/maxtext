@@ -333,11 +333,17 @@ def omics_pretrain_preprocessing_pipeline(
         "targets": config.max_target_length,
         "omics_inputs": max_segments * config.omics_dim,
     }
+    padding_struct = {
+        "inputs": pad_id,
+        "targets": pad_id,
+        "omics_inputs": 0.0,
+    }
     dataset = grain.experimental.FirstFitPackIterDataset(
         dataset,
         length_struct=length_struct,
         num_packing_bins=batch_size,
         max_sequences_per_bin=max_segments,
+        padding_struct=padding_struct,
     )
     rekey_dict = {
         "targets_segmentation": "targets_segment_ids",
@@ -567,11 +573,17 @@ def omics_sft_preprocessing_pipeline(
         "targets": config.max_target_length,
         "omics_inputs": max_segments * config.omics_dim,
     }
+    padding_struct = {
+        "inputs": pad_id,
+        "targets": pad_id,
+        "omics_inputs": 0.0,
+    }
     dataset = grain.experimental.FirstFitPackIterDataset(
         dataset,
         length_struct=length_struct,
         num_packing_bins=batch_size,
         max_sequences_per_bin=max_segments,
+        padding_struct=padding_struct,
     )
     rekey_dict = {
         "targets_segmentation": "targets_segment_ids",
