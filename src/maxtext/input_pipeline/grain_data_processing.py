@@ -17,6 +17,7 @@
 import glob
 from pathlib import Path
 import functools
+import numpy as np
 import ml_collections
 from concurrent import futures
 import json
@@ -275,15 +276,20 @@ def omics_pretrain_preprocessing_pipeline(
       pre-computed omics feature vector for that example.
 
   Output batch keys: ``inputs``, ``targets``, ``omics_inputs``
-    where ``omics_inputs`` has shape ``[batch, 1, omics_dim]``.
+    where ``omics_inputs`` has shape ``[batch, 1, omics_dim]`` (without packing)
+    or ``[batch, max_segments, omics_dim]`` (with packing).
 
-  Packing is not supported; examples are padded/trimmed to ``max_target_length``.
+  When ``config.packing=true``, uses grain's FirstFitPackIterDataset to pack
+  multiple short examples into one sequence.  The ``omics_inputs`` field is
+  treated as a 1D "sequence" of length ``omics_dim`` per example; the packer
+  concatenates them and a post-packing transform reshapes back to
+  ``[max_segments, omics_dim]``.  Attention masking via ``inputs_segmentation``
+  prevents cross-contamination between packed examples.
+
+  Output batch keys: ``inputs``, ``targets``, ``omics_inputs``
+    where ``omics_inputs`` has shape ``[batch, max_segments, omics_dim]``
+    (max_segments=1 without packing, >1 with packing).
   """
-  if config.packing:
-    raise ValueError(
-        "omics_pretrain_preprocessing_pipeline does not support sequence packing. "
-        "Set packing=false in your config when use_omics=true."
-    )
 
   assert len(data_columns) == 1
   text_column = data_columns[0]
@@ -317,16 +323,43 @@ def omics_pretrain_preprocessing_pipeline(
 
   batch_size = data_processing_utils.get_local_batch_size(config)
 
-  # Pad / trim text keys to max_target_length, leaving omics_inputs unchanged.
-  dataset = dataset.map(
-      input_pipeline_utils.OmicsPassthroughPadOrTrim(config.max_target_length, pad_id)
-  )
+  if config.packing:
+    # Flatten omics_inputs to [omics_dim] for the packer; coerce to array for non-proto sources.
+    dataset = dataset.map(lambda el: {**el, "omics_inputs": np.asarray(el["omics_inputs"]).ravel()})
+
+    max_segments = config.max_segments_per_seq if config.max_segments_per_seq is not None and config.max_segments_per_seq > 0 else 16
+    length_struct = {
+        "inputs": config.max_target_length,
+        "targets": config.max_target_length,
+        "omics_inputs": max_segments * config.omics_dim,
+    }
+    dataset = grain.experimental.FirstFitPackIterDataset(
+        dataset,
+        length_struct=length_struct,
+        num_packing_bins=batch_size,
+        max_sequences_per_bin=max_segments,
+    )
+    rekey_dict = {
+        "targets_segmentation": "targets_segment_ids",
+        "inputs_segmentation": "inputs_segment_ids",
+        "targets_position": "targets_positions",
+        "inputs_position": "inputs_positions",
+    }
+    dataset = dataset.map(input_pipeline_utils.Rekey(rekey_dict))
+    dataset = dataset.map(
+        input_pipeline_utils.ReconstructPackedOmics(config.omics_dim, max_segments)
+    )
+  else:
+    # Pad / trim text keys to max_target_length, leaving omics_inputs unchanged.
+    dataset = dataset.map(
+        input_pipeline_utils.OmicsPassthroughPadOrTrim(config.max_target_length, pad_id)
+    )
 
   if config.grain_use_elastic_iterator:
     dataset = dataset.map(input_pipeline_utils.ShiftData(ignored_ids=[pad_id], axis=0))
     return dataset
 
-  # Batch: text arrays become [B, T], omics_inputs becomes [B, 1, omics_dim].
+  # Batch: text arrays become [B, T], omics_inputs becomes [B, max_segments, omics_dim].
   batch_fn = functools.partial(grain.experimental.batch_and_pad, batch_size=batch_size, pad_value=pad_id)
   dataset = dataset.batch(batch_size, batch_fn=batch_fn)
   dataset = dataset.map(input_pipeline_utils.ShiftData(ignored_ids=[pad_id], axis=1))
@@ -525,10 +558,10 @@ def omics_sft_preprocessing_pipeline(
   batch_size = data_processing_utils.get_local_batch_size(config)
 
   if config.packing:
-    # Flatten omics_inputs from [1, omics_dim] to [omics_dim] for the packer.
-    dataset = dataset.map(lambda el: {**el, "omics_inputs": el["omics_inputs"].ravel()})
+    # Flatten omics_inputs to [omics_dim] for the packer; coerce to array for non-proto sources.
+    dataset = dataset.map(lambda el: {**el, "omics_inputs": np.asarray(el["omics_inputs"]).ravel()})
 
-    max_segments = config.max_segments_per_seq or 16
+    max_segments = config.max_segments_per_seq if config.max_segments_per_seq is not None and config.max_segments_per_seq > 0 else 16
     length_struct = {
         "inputs": config.max_target_length,
         "targets": config.max_target_length,
