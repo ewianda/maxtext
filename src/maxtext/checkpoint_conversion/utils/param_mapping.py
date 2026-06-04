@@ -792,64 +792,24 @@ def QWEN_MAXTEXT_TO_HF_PARAM_HOOK_FN(config, maxtext_config, scan_layers=False, 
     # loading_to_maxtext: HF [hidden_dim] -> MaxText [heads, head_dim]
     return input_tensor.reshape(target_shape)
 
-  rope_interleave = getattr(maxtext_config, "rope_interleave", True) if maxtext_config else True
-
-  def adjust_rope(input_tensor, target_shape):
-    """Convert between MaxText interleaved and HF split-half RoPE layout on the last dim."""
-    if not rope_interleave:
-      return input_tensor
-    arr = input_tensor
-    if saving_to_hf:
-      evens = arr[..., ::2]
-      odds = arr[..., 1::2]
-      return np.concatenate((evens, odds), axis=arr.ndim - 1)
-    else:
-      half_dim = arr.shape[-1] // 2
-      first_half = arr[..., :half_dim]
-      second_half = arr[..., half_dim:]
-      return np.stack([first_half, second_half], axis=-1).reshape(arr.shape)
-
-  def adjust_rope_bias(input_tensor, target_shape=None):
-    """Reshape bias and adjust RoPE layout for Q/K biases."""
-    tensor = input_tensor.reshape(target_shape) if target_shape else input_tensor
-    return adjust_rope(tensor, target_shape)
-
-  def adjust_rope_norm(input_tensor, target_shape=None):
-    """Adjust RoPE layout for Q/K norm scale vectors."""
-    return adjust_rope(input_tensor, target_shape)
-
-  # Hook chains for Q/K (adjust_rope before reshape) vs plain reshape for others
-  qk_kernel_hook = [adjust_rope, reshape_kernel] if rope_interleave else reshape_kernel
-  qk_bias_hook = adjust_rope_bias if rope_interleave else reshape_bias
-  if not saving_to_hf and rope_interleave:
-    qk_kernel_hook = [reshape_kernel, adjust_rope]
-
   mapping = {
       "params-token_embedder-embedding": pad_embedding_layer,
       "params-decoder-logits_dense-kernel": reshape_kernel,
   }
 
   kernel_hooks = [
+      "self_attention-query-kernel",
+      "self_attention-key-kernel",
       "self_attention-value-kernel",
       "self_attention-out-kernel",
       "mlp-wi_0-kernel",
       "mlp-wi_1-kernel",
       "mlp-wo-kernel",
   ]
-  qk_kernel_hooks = [
-      "self_attention-query-kernel",
-      "self_attention-key-kernel",
-  ]
   bias_hooks = [
-      "self_attention-value-bias",
-  ]
-  qk_bias_hooks = [
       "self_attention-query-bias",
       "self_attention-key-bias",
-  ]
-  qk_norm_hooks = [
-      "self_attention-query_norm-scale",
-      "self_attention-key_norm-scale",
+      "self_attention-value-bias",
   ]
   moe_kernel_hooks = [
       "moe_block-gate-kernel",
@@ -864,14 +824,8 @@ def QWEN_MAXTEXT_TO_HF_PARAM_HOOK_FN(config, maxtext_config, scan_layers=False, 
   if scan_layers:
     for key in kernel_hooks:
       mapping[f"params-decoder-layers-{key}"] = reshape_kernel
-    for key in qk_kernel_hooks:
-      mapping[f"params-decoder-layers-{key}"] = qk_kernel_hook
     for key in bias_hooks:
       mapping[f"params-decoder-layers-{key}"] = reshape_bias
-    for key in qk_bias_hooks:
-      mapping[f"params-decoder-layers-{key}"] = qk_bias_hook
-    for key in qk_norm_hooks:
-      mapping[f"params-decoder-layers-{key}"] = adjust_rope_norm
     if num_experts > 1:
       for key in moe_kernel_hooks:
         mapping[f"params-decoder-layers-{key}"] = reshape_kernel
@@ -879,14 +833,8 @@ def QWEN_MAXTEXT_TO_HF_PARAM_HOOK_FN(config, maxtext_config, scan_layers=False, 
     for i in range(n_layers):
       for key in kernel_hooks:
         mapping[f"params-decoder-layers_{i}-{key}"] = reshape_kernel
-      for key in qk_kernel_hooks:
-        mapping[f"params-decoder-layers_{i}-{key}"] = qk_kernel_hook
       for key in bias_hooks:
         mapping[f"params-decoder-layers_{i}-{key}"] = reshape_bias
-      for key in qk_bias_hooks:
-        mapping[f"params-decoder-layers_{i}-{key}"] = qk_bias_hook
-      for key in qk_norm_hooks:
-        mapping[f"params-decoder-layers_{i}-{key}"] = adjust_rope_norm
       if num_experts > 1:
         for key in moe_kernel_hooks:
           mapping[f"params-decoder-layers_{i}-{key}"] = reshape_kernel
