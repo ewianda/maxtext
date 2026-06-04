@@ -135,7 +135,7 @@ def inject_omics_embeddings(
   try:
     placeholder_counts_np = np.asarray(placeholder_counts)
     omics_counts_np = np.asarray(omics_counts)
-  except jax.errors.ConcretizationTypeError:
+  except Exception:
     placeholder_counts_np = None
     omics_counts_np = None
 
