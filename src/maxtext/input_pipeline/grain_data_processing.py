@@ -526,6 +526,7 @@ def omics_sft_preprocessing_pipeline(
     dataset = dataset.map(
         input_pipeline_utils.ParseFeaturesWithOmics(data_columns, tokenize, config.omics_dim, getattr(config, "omics_norm_stats_path", None) or None)
     )
+    dataset = dataset.filter(input_pipeline_utils.FilterNaNOmics())
     dataset = dataset.map(
         input_pipeline_utils.NormalizeFeatures(data_columns, tokenize, passthrough_keys=("omics_inputs",))
     )

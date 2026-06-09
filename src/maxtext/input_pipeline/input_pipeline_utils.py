@@ -549,6 +549,16 @@ class ParseFeatures(grain.MapTransform):
     return parsed
 
 
+class FilterNaNOmics(grain.FilterTransform):
+  """Drop records where omics_inputs contains NaN or Inf values."""
+
+  def filter(self, element):
+    omics = element.get("omics_inputs")
+    if omics is None:
+      return True
+    return bool(np.isfinite(omics).all())
+
+
 @dataclasses.dataclass
 class ParseFeaturesWithOmics(grain.MapTransform):
   """Parse serialized tf.train.Example protos, extracting text columns plus omics_inputs.
