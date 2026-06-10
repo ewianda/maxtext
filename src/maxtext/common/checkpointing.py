@@ -882,7 +882,7 @@ def load_state_if_possible(
         init_rng, key = jax.random.split(init_rng)
 
         def _make():
-          return jnp.zeros(x.shape, dtype=x.dtype)
+          return jax.random.normal(key, x.shape, dtype=x.dtype) * 0.01
 
         if sharding is None:
           return _make()
