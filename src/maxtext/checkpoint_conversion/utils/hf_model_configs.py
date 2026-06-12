@@ -1564,6 +1564,7 @@ HF_MODEL_CONFIGS = {
     "qwen2.5-7b": qwen25_7b_config,
     "qwen2.5-14b": qwen25_14b_config,
     "qwen3-0.6b": qwen3_0_6b_config,
+    "qwen3-0.6b-base": qwen3_0_6b_config,
     "qwen3-1.7b": qwen3_1_7b_config,
     "qwen3-1.7b-base": qwen3_1_7b_config,
     "qwen3-4b": qwen3_4b_config,

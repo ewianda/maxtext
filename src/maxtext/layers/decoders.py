@@ -706,6 +706,7 @@ class Decoder(nn.Module):
         projected_omics = OmicsProjection(
             input_dim=cfg.omics_dim,
             hidden_size=cfg.emb_dim,
+            projection_type=cfg.omics_projection_type,
             gain=cfg.omics_projection_gain,
             dtype=cfg.dtype,
             weight_dtype=cfg.weight_dtype,

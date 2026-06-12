@@ -1101,6 +1101,7 @@ omics_dim: 20006                 # Raw omics vector dimension (expression-only: 
 omics_token_id: -1               # Token ID used as the <omics> placeholder (must be set when use_omics=true;
                                  # add <omics> as a special token to your tokenizer and record the resulting ID)
 omics_projection_gain: 0.01     # Gain for scaled Xavier initializer used in the omics projection layer
+omics_projection_type: "linear" # "linear" (single Dense) or "mlp" (2-layer Dense-GELU-Dense)
 
 # Multimodal flags
 use_multimodal: false

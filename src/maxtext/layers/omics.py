@@ -42,43 +42,59 @@ def _scaled_xavier_uniform(gain: float):
 class OmicsProjection(nn.Module):
   """Projects raw omics vectors into the LLM embedding space.
 
-  This is a single linear transformation (affine projection) with a
-  small-gain initializer to keep omics contributions stable at the start
-  of training while remaining fully checkpoint-compatible with Linen/Orbax.
+  Supports two modes:
+    - "linear": single Dense layer (original)
+    - "mlp": two-layer MLP with GELU activation (input_dim → 2*hidden_size → hidden_size)
 
   Attributes:
-    input_dim:   Dimensionality of the raw omics input (default 20006 for
-                 expression-only from GENCODE v47 intersect Geneformer V2).
-    hidden_size: Dimensionality of the LLM embedding space.
-    gain:        Scaling factor for the Xavier-uniform weight initializer.
-    dtype:       Compute dtype (inherits from config dtype).
-    weight_dtype: Storage dtype for the kernel.
+    input_dim:       Dimensionality of the raw omics input.
+    hidden_size:     Dimensionality of the LLM embedding space.
+    projection_type: "linear" or "mlp".
+    gain:            Scaling factor for the Xavier-uniform weight initializer.
+    dtype:           Compute dtype.
+    weight_dtype:    Storage dtype for the kernel.
   """
 
   input_dim: int
   hidden_size: int
+  projection_type: str = "linear"
   gain: float = 0.01
   dtype: jnp.dtype = jnp.bfloat16
   weight_dtype: jnp.dtype = jnp.float32
 
   @nn.compact
   def __call__(self, omics_vectors: jnp.ndarray) -> jnp.ndarray:
-    """Project omics vectors.
+    x = jnp.asarray(omics_vectors, self.dtype)
 
-    Args:
-      omics_vectors: float array of shape [batch, num_omics, input_dim].
-
-    Returns:
-      Projected array of shape [batch, num_omics, hidden_size].
-    """
-    return nn.Dense(
-        features=self.hidden_size,
-        use_bias=True,
-        kernel_init=_scaled_xavier_uniform(self.gain),
-        dtype=self.dtype,
-        param_dtype=self.weight_dtype,
-        name="omics_kernel",
-    )(jnp.asarray(omics_vectors, self.dtype))
+    if self.projection_type == "mlp":
+      intermediate_size = self.hidden_size * 2
+      x = nn.Dense(
+          features=intermediate_size,
+          use_bias=True,
+          kernel_init=_scaled_xavier_uniform(self.gain),
+          dtype=self.dtype,
+          param_dtype=self.weight_dtype,
+          name="omics_up",
+      )(x)
+      x = nn.gelu(x)
+      x = nn.Dense(
+          features=self.hidden_size,
+          use_bias=True,
+          kernel_init=_scaled_xavier_uniform(self.gain),
+          dtype=self.dtype,
+          param_dtype=self.weight_dtype,
+          name="omics_down",
+      )(x)
+      return x
+    else:
+      return nn.Dense(
+          features=self.hidden_size,
+          use_bias=True,
+          kernel_init=_scaled_xavier_uniform(self.gain),
+          dtype=self.dtype,
+          param_dtype=self.weight_dtype,
+          name="omics_kernel",
+      )(x)
 
 
 def inject_omics_embeddings(
