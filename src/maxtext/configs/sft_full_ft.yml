@@ -1,0 +1,38 @@
+# Tunix-free SFT full-fine-tuning baseline config
+
+# Base MaxText run config
+run_name: sft-full-ft
+steps: 2000
+per_device_batch_size: 1
+max_target_length: 4096
+
+# Model / tokenizer
+model_name: llama3.1-8b-instruct
+tokenizer_type: huggingface
+tokenizer_path: meta-llama/Llama-3.1-8B-Instruct
+
+# Must point to an existing MaxText-compatible checkpoint
+load_parameters_path: gs://YOUR_BUCKET/YOUR_CHECKPOINT/0/items
+
+# Optimizer settings (fine-tuning regime)
+learning_rate: 1.0e-5
+warmup_steps_fraction: 0.03
+learning_rate_final_fraction: 0.1
+gradient_clipping_threshold: 1.0
+
+# Full fine-tuning: empty mask means all params trainable
+optimizer:
+  trainable_parameters_mask: []
+
+# JSONL SFT dataset settings
+sft_data_path: /path/to/train.jsonl
+sft_dataset_type: jsonl
+sft_messages_field: messages
+sft_prompt_field: prompt
+sft_response_field: response
+sft_text_field: text
+sft_train_on_prompt: false
+use_chat_template: true
+
+# Logging
+log_period: 10
