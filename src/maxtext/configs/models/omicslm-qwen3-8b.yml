@@ -1,0 +1,68 @@
+# Copyright 2024-2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# OmicsLM built on top of Qwen3-8B.
+#
+# This is the recommended backbone for OmicsLM production training.
+# The Qwen3-8B model was used in the Tunix pipeline and is larger than
+# the 4B variant, offering better language understanding for biological QA.
+#
+# Architecture: Qwen3-8B backbone + a trainable omics projection layer that
+# maps raw omics vectors (expression + FunOmics + Geneformer = 21287-dim) into
+# the LLM embedding space and injects them at <omics> placeholder positions.
+#
+# Gene panel: GENCODE v47 intersect Geneformer V2 = 20,006 genes
+#   omics_dim = 1 (scale) + 20006 (expression) + 512 (FunOmics) + 768 (Geneformer) = 21287
+#
+# Data: gs://omicslm-batch-data/arrayrecord/omicslm-*.array_record (16 shards, ~6M examples)
+# Norm stats: gs://omicslm-batch-data/omics_norm_stats.npz
+#
+# To fine-tune only the projection layer, set:
+#   trainable_parameters_mask: ['.*omics_projection.*']
+#
+# Backbone hyperparameters come from qwen3-8b.yml.
+
+include: "models/qwen3-8b.yml"
+
+# ── OmicsLM-specific settings ──────────────────────────────────────────────
+use_omics: true
+# Expression-only: 20006 genes (no Funomics/Geneformer in current ArrayRecords)
+omics_dim: 20006
+# Token ID of the <omics> placeholder — must match the tokenizer used.
+# Steps to set this correctly:
+#   1. Add <omics> as a special token to the Qwen3 tokenizer vocab.
+#   2. Note the resulting integer token ID (e.g. from tokenizer.encode("<omics>")[0]).
+#   3. Set this field to that integer.
+# The default of -1 is intentionally invalid so a misconfigured run fails
+# loudly instead of silently corrupting embeddings.
+omics_token_id: 151669
+# Small gain keeps omics contributions near-zero at the start of training so
+# the backbone language model loss is not destabilised.
+omics_projection_gain: 0.01
+
+# ── Data pipeline settings ─────────────────────────────────────────────────
+grain_file_type: "arrayrecord"
+# GCS pattern for the 6M-example ArrayRecord shards:
+# grain_train_files: "gs://omicslm-batch-data/arrayrecord/omicslm-*.array_record"
+
+# ── Recommended fine-tuning settings ──────────────────────────────────────
+# For SFT (instruction-tuning) with prompt+completion ArrayRecords, set:
+#   use_sft: true
+#   sft_train_on_completion_only: true   # loss only on the completion tokens
+# The omics_sft_preprocessing_pipeline is selected automatically when both
+# use_omics and use_sft are true.
+# Freeze the backbone; only train the omics projection initially:
+# trainable_parameters_mask: ['.*omics_projection.*']
+learning_rate: 1.e-4
+warmup_steps_fraction: 0.05

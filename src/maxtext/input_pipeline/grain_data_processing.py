@@ -17,6 +17,7 @@
 import glob
 from pathlib import Path
 import functools
+import numpy as np
 import ml_collections
 from concurrent import futures
 import json
@@ -255,6 +256,126 @@ def pretrain_preprocessing_pipeline(
   return dataset
 
 
+def omics_pretrain_preprocessing_pipeline(
+    dataset,
+    config,
+    data_columns,
+    tokenize,
+    grain_worker_count,
+    grain_per_worker_buffer_size,
+):
+  """Grain pipeline for OmicsLM pre-training data that emits ``omics_inputs``.
+
+  Behaves like ``pretrain_preprocessing_pipeline`` for the text columns, but
+  also parses the ``omics_inputs`` float field stored alongside each record and
+  ensures it survives all transforms without being padded or truncated.
+
+  Expected record schema (tf.train.Example / ArrayRecord):
+    - One text column (``data_columns[0]``): bytes (raw text) or int64 token IDs.
+    - ``omics_inputs``: FloatList of length ``config.omics_dim``, storing the
+      pre-computed omics feature vector for that example.
+
+  Output batch keys: ``inputs``, ``targets``, ``omics_inputs``
+    where ``omics_inputs`` has shape ``[batch, 1, omics_dim]`` (without packing)
+    or ``[batch, max_segments, omics_dim]`` (with packing).
+
+  When ``config.packing=true``, uses grain's FirstFitPackIterDataset to pack
+  multiple short examples into one sequence.  The ``omics_inputs`` field is
+  treated as a 1D "sequence" of length ``omics_dim`` per example; the packer
+  concatenates them and a post-packing transform reshapes back to
+  ``[max_segments, omics_dim]``.  Attention masking via ``inputs_segmentation``
+  prevents cross-contamination between packed examples.
+
+  Output batch keys: ``inputs``, ``targets``, ``omics_inputs``
+    where ``omics_inputs`` has shape ``[batch, max_segments, omics_dim]``
+    (max_segments=1 without packing, >1 with packing).
+  """
+
+  assert len(data_columns) == 1
+  text_column = data_columns[0]
+
+  tokenizer_model, pad_id = data_processing_utils.get_tokenizer_and_pad_id(config)
+
+  # Parse text columns AND the omics float field from the serialised proto.
+  if config.grain_file_type in ("arrayrecord", "tfrecord"):
+    dataset = dataset.map(
+        input_pipeline_utils.ParseFeaturesWithOmics(data_columns, tokenize, config.omics_dim, getattr(config, "omics_norm_stats_path", None) or None)
+    )
+    dataset = dataset.map(
+        input_pipeline_utils.NormalizeFeatures(data_columns, tokenize, passthrough_keys=("omics_inputs",))
+    )
+  else:
+    # Parquet / HuggingFace datasets: keep the text columns plus omics_inputs.
+    all_columns = list(data_columns) + ["omics_inputs"]
+    dataset = dataset.map(
+        input_pipeline_utils.KeepFeatures(feature_names=all_columns, tokenize=tokenize)
+    )
+
+  if tokenize:
+    dataset = dataset.map(
+        grain_tokenizer.TokenizeAndTrim(text_column, config.max_target_length, tokenizer_model)
+    )
+
+  # Rekey text column to ("inputs", "targets"); omics_inputs survives because
+  # Rekey only removes the mapped source keys, leaving other keys untouched.
+  rekey_dict = {"inputs": text_column, "targets": text_column}
+  dataset = dataset.map(input_pipeline_utils.Rekey(rekey_dict))
+
+  batch_size = data_processing_utils.get_local_batch_size(config)
+
+  if config.packing:
+    # Flatten omics_inputs to [omics_dim] for the packer; coerce to array for non-proto sources.
+    dataset = dataset.map(lambda el: {**el, "omics_inputs": np.asarray(el["omics_inputs"]).ravel()})
+
+    max_segments = config.max_segments_per_seq if config.max_segments_per_seq is not None and config.max_segments_per_seq > 0 else 16
+    length_struct = {
+        "inputs": config.max_target_length,
+        "targets": config.max_target_length,
+        "omics_inputs": max_segments * config.omics_dim,
+    }
+    padding_struct = {
+        "inputs": pad_id,
+        "targets": pad_id,
+        "omics_inputs": 0.0,
+    }
+    dataset = grain.experimental.FirstFitPackIterDataset(
+        dataset,
+        length_struct=length_struct,
+        num_packing_bins=batch_size,
+        max_sequences_per_bin=max_segments,
+        padding_struct=padding_struct,
+    )
+    rekey_dict = {
+        "targets_segmentation": "targets_segment_ids",
+        "inputs_segmentation": "inputs_segment_ids",
+        "targets_position": "targets_positions",
+        "inputs_position": "inputs_positions",
+    }
+    dataset = dataset.map(input_pipeline_utils.Rekey(rekey_dict))
+    dataset = dataset.map(
+        input_pipeline_utils.ReconstructPackedOmics(config.omics_dim, max_segments)
+    )
+  else:
+    # Pad / trim text keys to max_target_length, leaving omics_inputs unchanged.
+    dataset = dataset.map(
+        input_pipeline_utils.OmicsPassthroughPadOrTrim(config.max_target_length, pad_id)
+    )
+
+  if config.grain_use_elastic_iterator:
+    dataset = dataset.map(input_pipeline_utils.ShiftData(ignored_ids=[pad_id], axis=0))
+    return dataset
+
+  # Batch: text arrays become [B, T], omics_inputs becomes [B, max_segments, omics_dim].
+  batch_fn = functools.partial(grain.experimental.batch_and_pad, batch_size=batch_size, pad_value=pad_id)
+  dataset = dataset.batch(batch_size, batch_fn=batch_fn)
+  dataset = dataset.map(input_pipeline_utils.ShiftData(ignored_ids=[pad_id], axis=1))
+
+  dataset = data_processing_utils.apply_multiprocessing_and_prefetch(
+      dataset, config, grain_worker_count, grain_per_worker_buffer_size
+  )
+  return dataset
+
+
 def dpo_preprocessing_pipeline(
     dataset,
     config,
@@ -366,12 +487,145 @@ def sft_preprocessing_pipeline(
   return dataset
 
 
+def omics_sft_preprocessing_pipeline(
+    dataset,
+    config,
+    data_columns,
+    tokenize,
+    grain_worker_count,
+    grain_per_worker_buffer_size,
+):
+  """Grain pipeline for OmicsLM SFT data with prompt/completion columns and ``omics_inputs``.
+
+  Combines the SFT prompt-masking logic (loss only on completion tokens) with
+  the omics passthrough logic so that the ``omics_inputs`` float field survives
+  all transforms and ends up in the output batch.
+
+  When ``config.packing=true``, uses grain's FirstFitPackIterDataset to pack
+  multiple short examples into one sequence.  The ``omics_inputs`` field is
+  treated as a 1D "sequence" of length ``omics_dim`` per example; the packer
+  concatenates them and a post-packing transform reshapes back to
+  ``[max_segments, omics_dim]``.  Attention masking via ``inputs_segmentation``
+  prevents cross-contamination between packed examples.
+
+  Output batch keys: ``inputs``, ``targets``, ``omics_inputs``
+    where ``omics_inputs`` has shape ``[batch, max_segments, omics_dim]``
+    (max_segments=1 without packing, >1 with packing).
+  """
+
+  tokenizer_model, pad_id = data_processing_utils.get_tokenizer_and_pad_id(config)
+  base_tokenizer_model = tokenizer_model
+  tokenizer_model = getattr(tokenizer_model, "tokenizer", tokenizer_model)
+
+  data_processing_utils.validate_and_configure_sft_columns(
+      data_columns, tokenizer_model, getattr(config, "chat_template", None)
+  )
+
+  # Parse text columns AND the omics float field from the serialised proto.
+  if config.grain_file_type in ("arrayrecord", "tfrecord"):
+    dataset = dataset.map(
+        input_pipeline_utils.ParseFeaturesWithOmics(data_columns, tokenize, config.omics_dim, getattr(config, "omics_norm_stats_path", None) or None)
+    )
+    dataset = dataset.filter(input_pipeline_utils.FilterNaNOmics())
+    dataset = dataset.map(
+        input_pipeline_utils.NormalizeFeatures(data_columns, tokenize, passthrough_keys=("omics_inputs",))
+    )
+  else:
+    # Parquet / HuggingFace datasets: keep the text columns plus omics_inputs.
+    all_columns = list(data_columns) + ["omics_inputs"]
+    dataset = dataset.map(
+        input_pipeline_utils.KeepFeatures(feature_names=all_columns, tokenize=tokenize)
+    )
+
+  # Build chat-template chunks; omics_inputs passes through as an extra key.
+  dataset = dataset.map(
+      functools.partial(_format_chat_template_grain, data_columns=data_columns, tokenizer_model=tokenizer_model)
+  )
+
+  if tokenize:
+    dataset = dataset.map(
+        functools.partial(
+            _tokenize_sft_chunks,
+            text_column_name=data_columns[0],
+            tokenizer_model=tokenizer_model,
+        )
+    )
+
+  # Mask prompt tokens in targets; carry omics_inputs through unchanged.
+  dataset = dataset.map(
+      input_pipeline_utils.SFTPromptMasking(
+          text_column_name=data_columns[0],
+          completion_only=config.sft_train_on_completion_only,
+          max_target_length=config.max_target_length,
+          unk_id=pad_id,
+          passthrough_keys=("omics_inputs",),
+      )
+  )
+
+  batch_size = data_processing_utils.get_local_batch_size(config)
+
+  if config.packing:
+    # Flatten omics_inputs to [omics_dim] for the packer; coerce to array for non-proto sources.
+    dataset = dataset.map(lambda el: {**el, "omics_inputs": np.asarray(el["omics_inputs"]).ravel()})
+
+    max_segments = config.max_segments_per_seq if config.max_segments_per_seq is not None and config.max_segments_per_seq > 0 else 16
+    length_struct = {
+        "inputs": config.max_target_length,
+        "targets": config.max_target_length,
+        "omics_inputs": max_segments * config.omics_dim,
+    }
+    padding_struct = {
+        "inputs": pad_id,
+        "targets": pad_id,
+        "omics_inputs": 0.0,
+    }
+    dataset = grain.experimental.FirstFitPackIterDataset(
+        dataset,
+        length_struct=length_struct,
+        num_packing_bins=batch_size,
+        max_sequences_per_bin=max_segments,
+        padding_struct=padding_struct,
+    )
+    rekey_dict = {
+        "targets_segmentation": "targets_segment_ids",
+        "inputs_segmentation": "inputs_segment_ids",
+        "targets_position": "targets_positions",
+        "inputs_position": "inputs_positions",
+    }
+    dataset = dataset.map(input_pipeline_utils.Rekey(rekey_dict))
+    dataset = dataset.map(
+        input_pipeline_utils.ReconstructPackedOmics(config.omics_dim, max_segments)
+    )
+  else:
+    # Pad / trim text keys to max_target_length, leaving omics_inputs unchanged.
+    dataset = dataset.map(
+        input_pipeline_utils.OmicsPassthroughPadOrTrim(config.max_target_length, pad_id)
+    )
+
+  if config.grain_use_elastic_iterator:
+    dataset = dataset.map(input_pipeline_utils.ShiftData(ignored_ids=[pad_id], axis=0))
+    return dataset
+
+  batch_fn = functools.partial(grain.experimental.batch_and_pad, batch_size=batch_size, pad_value=pad_id)
+  dataset = dataset.batch(batch_size, batch_fn=batch_fn)
+  dataset = dataset.map(input_pipeline_utils.ShiftData(ignored_ids=[pad_id], axis=1))
+
+  dataset = data_processing_utils.apply_multiprocessing_and_prefetch(
+      dataset, config, grain_worker_count, grain_per_worker_buffer_size
+  )
+  return dataset
+
+
 def _get_pipeline_fn(config):
   """Returns the appropriate preprocessing pipeline function based on config."""
   if config.use_dpo:
     return dpo_preprocessing_pipeline
+  if getattr(config, "use_omics", False) and config.use_sft:
+    return omics_sft_preprocessing_pipeline
   if config.use_sft:
     return sft_preprocessing_pipeline
+  if getattr(config, "use_omics", False):
+    return omics_pretrain_preprocessing_pipeline
   return pretrain_preprocessing_pipeline
 
 

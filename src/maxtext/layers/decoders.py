@@ -37,6 +37,7 @@ from maxtext.layers import quantizations
 from maxtext.layers.attentions import attention_as_linen
 from maxtext.layers.embeddings import attend_on_embedding, embed_as_linen, positional_embedding_as_linen
 from maxtext.layers.normalizations import rms_norm
+from maxtext.layers.omics import OmicsProjection, inject_omics_embeddings
 from maxtext.layers.quantizations import AqtQuantization as Quant
 from maxtext.models import (
     deepseek,
@@ -693,6 +694,30 @@ class Decoder(nn.Module):
           )
         else:
           raise ValueError(f"Unsupported model_name for audio: {cfg.model_name}")
+
+      # OmicsLM: inject projected omics embeddings at <omics> placeholder positions.
+      omics_raw = getattr(multimodal_input, "omics_raw_inputs", None)
+      if omics_raw is not None and cfg.use_omics:
+        if cfg.omics_token_id < 0:
+          raise ValueError(
+              "use_omics=True requires a valid omics_token_id (>= 0). "
+              "Set omics_token_id in your config to the ID of the <omics> placeholder token."
+          )
+        projected_omics = OmicsProjection(
+            input_dim=cfg.omics_dim,
+            hidden_size=cfg.emb_dim,
+            projection_type=cfg.omics_projection_type,
+            gain=cfg.omics_projection_gain,
+            dtype=cfg.dtype,
+            weight_dtype=cfg.weight_dtype,
+            name="omics_projection",
+        )(omics_raw)
+        y = inject_omics_embeddings(
+            text_embeddings=y,
+            input_ids=decoder_input_tokens,
+            omics_embeddings=projected_omics,
+            omics_token_id=cfg.omics_token_id,
+        )
 
     y = nn.Dropout(rate=cfg.dropout_rate, broadcast_dims=(-2,))(y, deterministic=deterministic)
     y = y.astype(cfg.dtype)

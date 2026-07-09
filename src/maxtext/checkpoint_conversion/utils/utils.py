@@ -201,8 +201,11 @@ def _process(hf_path, processed_slice, output_weights, current_hook_fns, hf_shap
   # --- Case 2: Legacy Standard 1-to-1 Mapping (hf_path is a single string) ---
   else:
     if hf_path not in hf_shape_map:
-      raise ValueError(f"HF path '{hf_path}' not found in hf_shape_map.")
-    target_hf_shape = hf_shape_map[hf_path]
+      # Custom layers (e.g. omics_projection) won't exist in the reference HF model.
+      # Use the MaxText weight shape directly instead of validating against HF.
+      target_hf_shape = processed_slice.shape
+    else:
+      target_hf_shape = hf_shape_map[hf_path]
 
     if current_hook_fns:
       processed_slice = apply_hook_fns(processed_slice, target_hf_shape, current_hook_fns)

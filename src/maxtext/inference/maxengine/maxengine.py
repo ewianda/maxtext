@@ -201,6 +201,7 @@ class MaxEngine(_BaseEngine):
       encoder_videos=None,
       encoder_video_masks=None,
       encoder_audios=None,
+      omics_inputs=None,
   ):
     """NNX equivalent of `model.apply(..., mutable=["cache"])`. Returns (logits, new_cache_dict)."""
     cache_state = self._nnx_cache_state_template(mode=model_mode)
@@ -222,6 +223,7 @@ class MaxEngine(_BaseEngine):
         previous_chunk=previous_chunk,
         true_length=true_length,
         slot=slot,
+        omics_inputs=omics_inputs,
     )
     new_cache = nnx.state(model, nnx.Cache).to_pure_dict()
     return logits, new_cache
@@ -558,6 +560,7 @@ class MaxEngine(_BaseEngine):
       params: Params,
       padded_tokens: jax.Array,
       true_length: int,
+      omics_inputs: jax.Array | None = None,
       rng: PRNGKeyType | None = None,
   ):  # returns (new_prefix, result_tokens)
     """Wrapper for prefill for ahead-of-time compilation."""
@@ -566,6 +569,7 @@ class MaxEngine(_BaseEngine):
         params=params,
         padded_tokens=padded_tokens,
         true_length=true_length,
+        omics_inputs=omics_inputs,
         rng=rng,
     )
 
@@ -586,6 +590,7 @@ class MaxEngine(_BaseEngine):
       video_masks: jax.Array | None = None,
       audio_values: jax.Array | None = None,
       audio_masks: jax.Array | None = None,
+      omics_inputs: jax.Array | None = None,
       true_length: int,
       sampler: Callable[[Any], Any] | None = None,  # pylint: disable=unused-argument
       rng: PRNGKeyType | None = None,
@@ -692,6 +697,7 @@ class MaxEngine(_BaseEngine):
             encoder_videos=videos,
             encoder_video_masks=video_masks,
             encoder_audios=audio_values,
+            omics_inputs=omics_inputs,
             enable_dropout=False,
             model_mode=MODEL_MODE_PREFILL,
             previous_chunk=previous_chunk,
@@ -710,6 +716,7 @@ class MaxEngine(_BaseEngine):
             encoder_videos=videos,
             encoder_video_masks=video_masks,
             encoder_audios=audio_values,
+            omics_inputs=omics_inputs,
             decoder_segment_ids=sequence_indicator,
             enable_dropout=False,
             model_mode=MODEL_MODE_PREFILL,
@@ -795,6 +802,7 @@ class MaxEngine(_BaseEngine):
       video_masks: jax.Array | None = None,
       audio_values: jax.Array | None = None,
       audio_masks: jax.Array | None = None,
+      omics_inputs: jax.Array | None = None,
       true_length: int,
       sampler: Callable[[Any], Any] | None = None,  # pylint: disable=unused-argument
       rng: PRNGKeyType | None = None,
@@ -828,6 +836,7 @@ class MaxEngine(_BaseEngine):
         video_masks=video_masks,
         audio_values=audio_values,
         audio_masks=audio_masks,
+        omics_inputs=omics_inputs,
         sampler=sampler,
         true_length=true_length,
         slot=slot,

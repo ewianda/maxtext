@@ -86,6 +86,7 @@ class MultimodalInput:
   audio_masks: Array | None = None
   bidirectional_mask: Array | None = None
   bidirectional_mask_video: Array | None = None
+  omics_raw_inputs: Array | None = None  # [batch, num_omics, omics_dim] raw omics vectors before projection
 
 
 class DecoderBlockType(enum.Enum):

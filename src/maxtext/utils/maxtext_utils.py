@@ -1371,13 +1371,14 @@ def init_initial_state(model, tx, config, is_training, key):
   # Reference: https://flax-linen.readthedocs.io/en/latest/guides/flax_fundamentals/rng_guide.html
   params_key, dropout_key, aqt_key = jax.random.split(key, 3)
 
+  omics_shape = (config.micro_batch_size_to_train_on, 1, config.omics_dim) if getattr(config, "use_omics", False) else None
   model_vars = model.init(
       {"params": params_key, "dropout": dropout_key, "aqt": aqt_key},
       np.ones(input_shape, dtype=jnp.int32),
       np.ones(input_shape, dtype=jnp.int32),
       encoder_images=np.ones(image_shape, dtype=jnp.int32) if config.use_multimodal else None,
       encoder_audios=np.ones(audio_shape, dtype=jnp.float32) if config.use_audio else None,
-      # nnx_method="no_op",
+      omics_inputs=np.zeros(omics_shape, dtype=jnp.float32) if omics_shape is not None else None,
   )
   if is_training:
     return init_training_state(model.apply, model_vars, tx)

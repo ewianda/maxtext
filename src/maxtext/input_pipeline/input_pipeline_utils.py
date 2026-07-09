@@ -326,11 +326,12 @@ class SFTPromptMasking(grain.MapTransform):
   For targets, if train on completion only, the prompt will be masked by unk_id. Otherwise the same as inputs.
   """
 
-  def __init__(self, text_column_name, completion_only, max_target_length, unk_id=0):
+  def __init__(self, text_column_name, completion_only, max_target_length, unk_id=0, *, passthrough_keys=()):
     self.text_column_name = text_column_name
     self.completion_only = completion_only
     self.max_target_length = max_target_length
     self.unk_id = unk_id
+    self.passthrough_keys = passthrough_keys
 
   def map(self, element):
     """
@@ -341,15 +342,21 @@ class SFTPromptMasking(grain.MapTransform):
       concatenated sequence is masked using `self.unk_id`.
     - If `self.completion_only` is `False`, the target sequence is
       identical to the input sequence.
+    Any keys listed in `self.passthrough_keys` are copied from the input
+    element into the output unchanged (e.g. ``omics_inputs``).
     """
     inputs, targets = [], []
     for i, text in enumerate(element[self.text_column_name]):
       inputs += text
       targets += [self.unk_id] * len(text) if self.completion_only and element["is_prompt"][i] else text
-    return {
+    result = {
         "inputs": np.asarray(inputs[: self.max_target_length], dtype=np.int32),
         "targets": np.asarray(targets[: self.max_target_length], dtype=np.int32),
     }
+    for key in self.passthrough_keys:
+      if key in element:
+        result[key] = element[key]
+    return result
 
 
 @dataclasses.dataclass
@@ -542,19 +549,182 @@ class ParseFeatures(grain.MapTransform):
     return parsed
 
 
+class FilterNaNOmics(grain.FilterTransform):
+  """Drop records where omics_inputs contains NaN or Inf values."""
+
+  def filter(self, element):
+    omics = element.get("omics_inputs")
+    if omics is None:
+      return True
+    return bool(np.isfinite(omics).all())
+
+
+@dataclasses.dataclass
+class ParseFeaturesWithOmics(grain.MapTransform):
+  """Parse serialized tf.train.Example protos, extracting text columns plus omics_inputs.
+
+  This extends the behaviour of ParseFeatures by also reading an ``omics_inputs``
+  float field from the proto (if present) and reshaping it to ``[1, omics_dim]``
+  so that batching produces ``[batch, 1, omics_dim]`` tensors.  When the field is
+  absent a zero vector is used as a placeholder.
+
+  Args:
+    data_columns: Text feature column names to extract.
+    tokenize: If True the columns contain raw bytes (text); if False they
+      contain pre-tokenized int64 token IDs.
+    omics_dim: Expected length of the flat omics float vector stored in the
+      proto.  The vector is reshaped to ``[1, omics_dim]`` per example.
+  """
+
+  def __init__(self, data_columns, tokenize, omics_dim: int, omics_norm_stats_path: str | None = None):
+    self.data_columns = data_columns
+    self.tokenize = tokenize
+    self.omics_dim = omics_dim
+    self.gene_mean = None
+    self.global_std = 1.0
+    if omics_norm_stats_path:
+      import io
+      if omics_norm_stats_path.startswith("gs://"):
+        import tensorflow as tf
+        raw = tf.io.gfile.GFile(omics_norm_stats_path, "rb").read()
+        stats = np.load(io.BytesIO(raw))
+      else:
+        stats = np.load(omics_norm_stats_path)
+      self.gene_mean = stats["gene_mean"].astype(np.float32)
+      self.global_std = float(stats["global_std"])
+
+  def map(self, element):
+    """Parse a serialized tf.train.Example proto and extract features + omics."""
+    example = example_pb2.Example()
+    example.ParseFromString(element)
+    features = example.features.feature
+
+    missing = [c for c in self.data_columns if c not in features]
+    if missing and "prompt" in features and "completion" in features:
+      prompt_text = features["prompt"].bytes_list.value[0].decode()
+      completion_text = features["completion"].bytes_list.value[0].decode()
+      parsed = {self.data_columns[0]: np.array([(prompt_text + " " + completion_text).encode()], dtype=object)}
+    elif missing:
+      raise ValueError(
+          f"Column {missing} not found in dataset. Available columns: {sorted(features.keys())}. "
+          "Please set train_data_columns or eval_data_columns accordingly."
+      )
+    else:
+      parsed = {}
+      for col in self.data_columns:
+        f = features[col]
+        if self.tokenize:
+          if not f.bytes_list.value:
+            raise ValueError(
+                f"tokenize_data=True but column '{col}' has no text (bytes) data. "
+                "Set tokenize_train_data or tokenize_eval_data to False if your dataset is already tokenized."
+            )
+          parsed[col] = np.array(f.bytes_list.value, dtype=object)
+        else:
+          if not f.int64_list.value:
+            raise ValueError(
+                f"tokenize_data=False but column '{col}' has no integer token data. "
+                "Set tokenize_train_data or tokenize_eval_data to True if your dataset needs tokenization."
+            )
+          parsed[col] = np.array(f.int64_list.value, dtype=np.int32)
+
+    # Parse the omics float field; fall back to a zero vector when absent.
+    # Support both "omics" (legacy) and "omics_inputs" field names.
+    omics_key = "omics" if "omics" in features else "omics_inputs" if "omics_inputs" in features else None
+    if omics_key is not None:
+      f = features[omics_key]
+      if f.float_list.value:
+        omics_flat = np.array(f.float_list.value, dtype=np.float32)
+      elif f.bytes_list.value:
+        omics_flat = np.frombuffer(f.bytes_list.value[0], dtype=np.float32).copy()
+      else:
+        omics_flat = np.zeros(self.omics_dim, dtype=np.float32)
+      if self.gene_mean is not None:
+        omics_flat = (np.log1p(omics_flat) - self.gene_mean[:omics_flat.size]) / max(self.global_std, 1e-8)
+      if omics_flat.size < self.omics_dim:
+        omics_flat = np.pad(omics_flat, (0, self.omics_dim - omics_flat.size), constant_values=0.0)
+      elif omics_flat.size > self.omics_dim:
+        raise ValueError(
+            f"{omics_key} field has {omics_flat.size} floats but omics_dim={self.omics_dim}. "
+            "Check that config.omics_dim matches the dimension stored in your ArrayRecords."
+        )
+    else:
+      omics_flat = np.zeros(self.omics_dim, dtype=np.float32)
+    # Shape [1, omics_dim]: one omics token slot per example; batching gives [B, 1, omics_dim].
+    parsed["omics_inputs"] = omics_flat.reshape(1, self.omics_dim)
+    return parsed
+
+
+@dataclasses.dataclass
+class OmicsPassthroughPadOrTrim(grain.MapTransform):
+  """Pad/trim text keys while passing ``omics_inputs`` through unchanged.
+
+  ``PadOrTrimToMaxLength`` processes every key in the element dict, which would
+  corrupt the 2-D ``omics_inputs`` tensor (shape ``[1, omics_dim]``).  This
+  transform temporarily removes ``omics_inputs`` before delegating to
+  ``PadOrTrimToMaxLength``, then restores it.
+
+  Args:
+    max_length: Target sequence length for text columns.
+    pad_id: Padding token ID.
+  """
+
+  def __init__(self, max_length: int, pad_id: int = 0):
+    self._inner = PadOrTrimToMaxLength(max_length, pad_id)
+
+  def map(self, element: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+    omics = element.pop("omics_inputs", None)
+    result = self._inner.map(element)
+    if omics is not None:
+      result["omics_inputs"] = omics
+    return result
+
+
+@dataclasses.dataclass
+class ReconstructPackedOmics(grain.MapTransform):
+  """Reshape packed flat omics vector back to [max_segments, omics_dim].
+
+  After grain's FirstFitPackIterDataset, ``omics_inputs`` is a flat 1D array
+  of concatenated omics vectors from multiple packed examples (padded to
+  ``max_segments * omics_dim``).  This transform reshapes it to
+  ``[max_segments, omics_dim]`` so the model's injection function can match
+  each vector to its ``<omics>`` placeholder token.
+
+  Also removes the packer's ``omics_inputs_segment_ids`` and
+  ``omics_inputs_positions`` fields since they're no longer needed after reshape.
+  """
+
+  def __init__(self, omics_dim: int, max_segments: int):
+    self.omics_dim = omics_dim
+    self.max_segments = max_segments
+
+  def map(self, element: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+    omics_flat = element.pop("omics_inputs", None)
+    element.pop("omics_inputs_segment_ids", None)
+    element.pop("omics_inputs_positions", None)
+    if omics_flat is not None:
+      element["omics_inputs"] = omics_flat.reshape(self.max_segments, self.omics_dim)
+    return element
+
+
 @dataclasses.dataclass
 class NormalizeFeatures(grain.MapTransform):
   """Normalize text feature keys."""
 
-  def __init__(self, column_names, tokenize):
+  def __init__(self, column_names, tokenize, passthrough_keys=()):
     self.column_names = column_names
     self.tokenize = tokenize
+    self.passthrough_keys = passthrough_keys
 
   def map(self, element):
     if self.tokenize:
-      return {col: element[col][0].decode() for col in self.column_names}
+      result = {col: element[col][0].decode() for col in self.column_names}
     else:
-      return {col: element[col] for col in self.column_names}
+      result = {col: element[col] for col in self.column_names}
+    for key in self.passthrough_keys:
+      if key in element:
+        result[key] = element[key]
+    return result
 
 
 @dataclasses.dataclass

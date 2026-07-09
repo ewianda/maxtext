@@ -245,6 +245,7 @@ ModelName = Literal[
     "qwen2.5-7b",
     "qwen2.5-14b",
     "qwen3-0.6b",
+    "qwen3-0.6b-base",
     "qwen3-1.7b",
     "qwen3-1.7b-base",
     "qwen3-4b",
@@ -1812,6 +1813,12 @@ class Tensorboard(BaseModel):
 class MultimodalGeneral(BaseModel):
   """General configuration for Multimodal models."""
 
+  use_omics: bool = Field(False, description="Enable OmicsLM: inject projected omics vectors at <omics> token positions.")
+  omics_dim: int = Field(20006, description="Raw omics vector dimension.")
+  omics_token_id: int = Field(-1, description="Token ID used as the <omics> placeholder.")
+  omics_projection_gain: float = Field(0.01, description="Gain for scaled Xavier initializer in the omics projection layer.")
+  omics_projection_type: str = Field("linear", description="Projection type: 'linear' (single Dense) or 'mlp' (2-layer Dense-GELU-Dense).")
+  omics_norm_stats_path: str = Field("", description="Path to .npz with gene_mean and global_std for omics normalization.")
   use_multimodal: bool = Field(False, description="Enable multimodal capabilities.")
   freeze_vision_encoder_params: bool = Field(True, description="Freeze the parameters of the vision encoder.")
   freeze_audio_encoder_params: bool = Field(True, description="Freeze the parameters of the audio encoder.")

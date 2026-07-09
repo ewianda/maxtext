@@ -619,6 +619,8 @@ def QWEN_MAXTEXT_TO_HF_PARAM_MAPPING(config, maxtext_config, scan_layers=False):
       "params-token_embedder-embedding": "model.embed_tokens.weight",
       "params-decoder-decoder_norm-scale": "model.norm.weight",
       "params-decoder-logits_dense-kernel": "lm_head.weight",
+      "params-decoder-omics_projection-omics_kernel-kernel": "model.omics_projection.weight",
+      "params-decoder-omics_projection-omics_kernel-bias": "model.omics_projection.bias",
   }
 
   if scan_layers:
@@ -3535,6 +3537,7 @@ PARAM_MAPPING = {
     "qwen2.5-7b": QWEN_MAXTEXT_TO_HF_PARAM_MAPPING,
     "qwen2.5-14b": QWEN_MAXTEXT_TO_HF_PARAM_MAPPING,
     "qwen3-0.6b": QWEN_MAXTEXT_TO_HF_PARAM_MAPPING,
+    "qwen3-0.6b-base": QWEN_MAXTEXT_TO_HF_PARAM_MAPPING,
     "qwen3-1.7b": QWEN_MAXTEXT_TO_HF_PARAM_MAPPING,
     "qwen3-1.7b-base": QWEN_MAXTEXT_TO_HF_PARAM_MAPPING,
     "qwen3-4b": QWEN_MAXTEXT_TO_HF_PARAM_MAPPING,
@@ -3585,6 +3588,7 @@ HOOK_FNS = {
     "qwen2.5-7b": QWEN_MAXTEXT_TO_HF_PARAM_HOOK_FN,
     "qwen2.5-14b": QWEN_MAXTEXT_TO_HF_PARAM_HOOK_FN,
     "qwen3-0.6b": QWEN_MAXTEXT_TO_HF_PARAM_HOOK_FN,
+    "qwen3-0.6b-base": QWEN_MAXTEXT_TO_HF_PARAM_HOOK_FN,
     "qwen3-1.7b": QWEN_MAXTEXT_TO_HF_PARAM_HOOK_FN,
     "qwen3-1.7b-base": QWEN_MAXTEXT_TO_HF_PARAM_HOOK_FN,
     "qwen3-4b": QWEN_MAXTEXT_TO_HF_PARAM_HOOK_FN,
